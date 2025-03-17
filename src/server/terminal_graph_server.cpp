@@ -1,3 +1,4 @@
+// terminal_graph_server.cpp
 #include "terminal_graph_server.h"
 
 #include <QDebug>
@@ -36,28 +37,18 @@ TerminalGraphServer::TerminalGraphServer(const QString& pathToTerminalsDirectory
       m_pathToTerminalsDirectory(pathToTerminalsDirectory),
       m_rabbitMQHandler(nullptr),
       m_commandProcessor(nullptr),
-      m_heartbeatTimer(nullptr),
       m_serverId(QUuid::createUuid().toString())
 {
-    qInfo() << "Terminal Graph Server created with ID:" << m_serverId
+    qDebug() << "Terminal Graph Server created with ID:" << m_serverId
             << "and terminal directory:" << (!pathToTerminalsDirectory.isEmpty() ? pathToTerminalsDirectory : "None");
     
     // Create command processor
     m_commandProcessor = new CommandProcessor(m_graph, this);
-    
-    // Create heartbeat timer
-    m_heartbeatTimer = new QTimer(this);
-    connect(m_heartbeatTimer, &QTimer::timeout, this, &TerminalGraphServer::sendHeartbeat);
 }
 
 TerminalGraphServer::~TerminalGraphServer()
 {
     QMutexLocker locker(&m_mutex);
-    
-    // Stop heartbeat timer
-    if (m_heartbeatTimer) {
-        m_heartbeatTimer->stop();
-    }
     
     // Disconnect from RabbitMQ
     if (m_rabbitMQHandler) {
@@ -70,7 +61,7 @@ TerminalGraphServer::~TerminalGraphServer()
     delete m_graph;
     m_graph = nullptr;
     
-    qInfo() << "Terminal Graph Server destroyed";
+    qDebug() << "Terminal Graph Server destroyed";
     
     // Reset singleton instance
     QMutexLocker instanceLocker(&s_instanceMutex);
@@ -89,7 +80,7 @@ bool TerminalGraphServer::initialize(
     
     // Create RabbitMQ handler if not already created
     if (!m_rabbitMQHandler) {
-        m_rabbitMQHandler = new RabbitMQHandler(this);
+        m_rabbitMQHandler = new RabbitMQHandler(nullptr);
         
         // Connect signals
         connect(m_rabbitMQHandler, &RabbitMQHandler::connectionChanged,
@@ -108,10 +99,8 @@ bool TerminalGraphServer::initialize(
     );
     
     if (connected) {
-        // Start heartbeat timer
-        m_heartbeatTimer->start(30000); // 30 seconds
         
-        qInfo() << "Terminal Graph Server initialized and connected to RabbitMQ at"
+        qDebug() << "Terminal Graph Server initialized and connected to RabbitMQ at"
                 << rabbitMQHost << ":" << rabbitMQPort;
     } else {
         qWarning() << "Failed to connect to RabbitMQ at"
@@ -125,12 +114,7 @@ void TerminalGraphServer::shutdown()
 {
     QMutexLocker locker(&m_mutex);
     
-    qInfo() << "Shutting down Terminal Graph Server...";
-    
-    // Stop heartbeat timer
-    if (m_heartbeatTimer) {
-        m_heartbeatTimer->stop();
-    }
+    qDebug() << "Shutting down Terminal Graph Server...";
     
     // Disconnect from RabbitMQ
     if (m_rabbitMQHandler) {
@@ -186,7 +170,7 @@ bool TerminalGraphServer::deserializeGraph(const QJsonObject& graphData)
         // Delete the old graph
         delete oldGraph;
         
-        qInfo() << "Graph deserialized successfully";
+        qDebug() << "Graph deserialized successfully";
         return true;
     } catch (const std::exception& e) {
         qWarning() << "Failed to deserialize graph:" << e.what();
@@ -223,7 +207,7 @@ bool TerminalGraphServer::saveGraph(const QString& filepath) const
         file.write(doc.toJson(QJsonDocument::Indented));
         file.close();
         
-        qInfo() << "Graph saved to file:" << filepath;
+        qDebug() << "Graph saved to file:" << filepath;
         return true;
     } catch (const std::exception& e) {
         qWarning() << "Failed to save graph:" << e.what();
@@ -335,47 +319,6 @@ void TerminalGraphServer::onMessageReceived(const QJsonObject& message)
     
     // Send response
     m_rabbitMQHandler->sendResponse(response);
-}
-
-void TerminalGraphServer::sendHeartbeat()
-{
-    QMutexLocker locker(&m_mutex);
-
-    if (!m_rabbitMQHandler || !m_rabbitMQHandler->isConnected()) {
-        return;
-    }
-
-    // Create heartbeat message
-    QJsonObject heartbeat;
-    heartbeat["type"] = "heartbeat";
-    heartbeat["server_id"] = m_serverId;
-    heartbeat["timestamp"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    heartbeat["server_status"] = "active";
-
-    // Add some basic stats
-    if (m_graph) {
-        heartbeat["terminal_count"] = m_graph->getTerminalCount();
-
-        // Get total container count across all terminals
-        int totalContainers = 0;
-        QVariantMap terminalStatus = m_graph->getTerminalStatus(); // Remove the .toMap() call
-
-        for (auto it = terminalStatus.constBegin(); it != terminalStatus.constEnd(); ++it) {
-            QVariantMap status = it.value().toMap();
-            totalContainers += status.value("container_count", 0).toInt();
-        }
-
-        heartbeat["container_count"] = totalContainers;
-    }
-
-    // Add memory usage information
-    // Note: this is a simplified approach, more accurate memory tracking would require platform-specific code
-    heartbeat["memory_usage_kb"] = QCoreApplication::applicationPid(); // Just a placeholder
-
-    // Send heartbeat message
-    m_rabbitMQHandler->sendResponse(heartbeat);
-
-    qDebug() << "Sent heartbeat message";
 }
 
 } // namespace TerminalSim

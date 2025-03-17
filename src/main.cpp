@@ -22,7 +22,7 @@ int main(int argc, char *argv[])
     parser.addVersionOption();
     
     QCommandLineOption rabbitHostOption(
-        QStringList() << "h" << "host",
+        QStringList() << "H" << "host",
         "RabbitMQ host address",
         "host",
         "localhost"
@@ -85,10 +85,10 @@ int main(int argc, char *argv[])
         dataDir.mkpath(".");
     }
     
-    qInfo() << "Starting Terminal Simulation Server...";
-    qInfo() << "RabbitMQ Host:" << rabbitHost;
-    qInfo() << "RabbitMQ Port:" << rabbitPort;
-    qInfo() << "Data Path:" << dataPath;
+    qDebug() << "Starting Terminal Simulation Server...";
+    qDebug() << "RabbitMQ Host:" << rabbitHost;
+    qDebug() << "RabbitMQ Port:" << rabbitPort;
+    qDebug() << "Data Path:" << dataPath;
     
     // Initialize server
     TerminalSim::TerminalGraphServer* server = 

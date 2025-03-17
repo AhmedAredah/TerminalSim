@@ -15,7 +15,7 @@ CommandProcessor::CommandProcessor(TerminalGraph* graph, QObject* parent)
     : QObject(parent), m_graph(graph)
 {
     registerCommands();
-    qInfo() << "Command processor initialized with" << m_commandHandlers.size() << "command handlers";
+    qDebug() << "Command processor initialized with" << m_commandHandlers.size() << "command handlers";
 }
 
 CommandProcessor::~CommandProcessor()

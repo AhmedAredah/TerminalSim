@@ -117,11 +117,6 @@ private slots:
      */
     void onMessageReceived(const QJsonObject& message);
     
-    /**
-     * @brief Send heartbeat signal
-     */
-    void sendHeartbeat();
-    
 private:
     // Constructor is private for singleton
     explicit TerminalGraphServer(const QString& pathToTerminalsDirectory = QString());
@@ -144,9 +139,6 @@ private:
     
     // Command processor
     CommandProcessor* m_commandProcessor;
-    
-    // Heartbeat timer
-    QTimer* m_heartbeatTimer;
     
     // Server ID
     QString m_serverId;

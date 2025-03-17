@@ -101,7 +101,7 @@ Terminal::Terminal(
         m_storage = new ContainerCore::ContainerMap(m_sqlFile);
     }
     
-    qInfo() << "Terminal" << m_terminalName << "initialized with" << m_interfaces.size() 
+    qDebug() << "Terminal" << m_terminalName << "initialized with" << m_interfaces.size()
             << "interfaces and max capacity:" << (m_maxCapacity == std::numeric_limits<int>::max() ? "unlimited" : QString::number(m_maxCapacity));
 }
 

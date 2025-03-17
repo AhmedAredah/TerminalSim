@@ -147,6 +147,9 @@ private slots:
         // We don't use the result, but call the method to ensure it doesn't crash
         server->initialize("non_existent_host", 5672, "guest", "guest");
 
+        // Give some time for retry attempts to complete
+        QTest::qWait(2000);
+
         // We can't check private members, but we can check that the server is still functional
         // Test a simple command to verify the server is still working
         QVariantMap pingParams;
@@ -159,13 +162,14 @@ private slots:
     }
 
     void testConnectionStatus() {
-        // Test connection status - replacing the heartbeat test
+        // Test connection status
         TerminalGraphServer* server = TerminalGraphServer::getInstance();
 
         // We can check the connection status through the public API
         bool connected = server->isConnected();
 
-        // This will likely be false since we're using invalid connection params
+        // This might be false, especially in a test environment without RabbitMQ,
+        // despite the retry mechanism
         // Just verify the call doesn't crash
         QVERIFY(connected == true || connected == false);
     }

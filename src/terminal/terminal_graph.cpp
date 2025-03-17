@@ -2236,7 +2236,7 @@ TerminalGraph* TerminalGraph::deserializeGraph(const QJsonObject& graphData, con
             }
         }
         
-        qInfo() << "Graph deserialized successfully with" << graph->m_terminals.size() << "terminals and"
+        qDebug() << "Graph deserialized successfully with" << graph->m_terminals.size() << "terminals and"
                 << graph->m_terminalAliases.size() << "aliases";
         
         return graph;
@@ -2293,7 +2293,7 @@ TerminalGraph* TerminalGraph::loadFromFile(const QString& filepath, const QStrin
     
     TerminalGraph* graph = deserializeGraph(doc.object(), pathToTerminalsDirectory);
     
-    qInfo() << "Graph loaded from file:" << filepath;
+    qDebug() << "Graph loaded from file:" << filepath;
     
     return graph;
 }

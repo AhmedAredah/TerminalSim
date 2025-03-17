@@ -8,6 +8,8 @@
 #include <QTimer>
 #include <QDateTime>
 #include <QUuid>
+#include <chrono>
+#include <thread>
 
 // RabbitMQ-C headers
 #include <rabbitmq-c/amqp.h>
@@ -15,6 +17,17 @@
 #include <rabbitmq-c/framing.h>
 
 namespace TerminalSim {
+
+// Constants for RabbitMQ connection
+static const int MAX_RECONNECT_ATTEMPTS = 5;
+static const int RECONNECT_DELAY_SECONDS = 5;  // Delay between reconnection attempts
+static const std::string GithubLink = "https://github.com/VTTI-CSM/ShipNetSim";
+static const std::string EXCHANGE_NAME = "CargoNetSim.Exchange";
+static const std::string COMMAND_QUEUE_NAME = "CargoNetSim.CommandQueue.TerminalSim";
+static const std::string RESPONSE_QUEUE_NAME = "CargoNetSim.ResponseQueue.TerminalSim";
+static const std::string RECEIVING_ROUTING_KEY = "CargoNetSim.Command.TerminalSim";
+static const std::string PUBLISHING_ROUTING_KEY = "CargoNetSim.Response.TerminalSim";
+static const int MAX_SEND_COMMAND_RETRIES = 3;
 
 RabbitMQHandler::RabbitMQHandler(QObject* parent)
     : QObject(parent),
@@ -24,15 +37,15 @@ RabbitMQHandler::RabbitMQHandler(QObject* parent)
     m_port(5672),
     m_username("guest"),
     m_password("guest"),
-    m_exchangeName(CARGONET_EXCHANGE),
-    m_commandQueueName(CARGONET_COMMAND_QUEUE),
-    m_responseQueueName(CARGONET_RESPONSE_QUEUE),
-    m_commandRoutingKey(CARGONET_COMMAND_ROUTING_KEY),
-    m_responseRoutingKey(CARGONET_RESPONSE_ROUTING_KEY),
+    m_exchangeName(QString::fromStdString(EXCHANGE_NAME)),
+    m_commandQueueName(QString::fromStdString(COMMAND_QUEUE_NAME)),
+    m_responseQueueName(QString::fromStdString(RESPONSE_QUEUE_NAME)),
+    m_commandRoutingKey(QString::fromStdString(RECEIVING_ROUTING_KEY)),
+    m_responseRoutingKey(QString::fromStdString(PUBLISHING_ROUTING_KEY)),
     m_workerThread(nullptr),
     m_threadRunning(false)
 {
-    qInfo() << "RabbitMQ handler initialized with exchange:" << m_exchangeName
+    qDebug() << "RabbitMQ handler initialized with exchange:" << m_exchangeName
             << ", command queue:" << m_commandQueueName
             << ", response queue:" << m_responseQueueName;
 }
@@ -59,96 +72,131 @@ bool RabbitMQHandler::connect(const QString& host, int port, const QString& user
     m_username = username;
     m_password = password;
 
-    try {
-        // Create new connection
-        m_connection = amqp_new_connection();
-        if (!m_connection) {
-            qWarning() << "Failed to create RabbitMQ connection";
-            return false;
+    // Display server information
+    QString yearRange = QString("(C) %1-%2 ")
+                            .arg(QDate::currentDate().year() - 1)
+                            .arg(QDate::currentDate().year());
+
+    QString appDetails;
+    QTextStream detailsStream(&appDetails);
+    detailsStream << "TerminalSim"
+                  << " [Version 1.0]" << Qt::endl;
+    detailsStream << yearRange << "VTTI-CSM" << Qt::endl;
+    detailsStream << QString::fromStdString(GithubLink) << Qt::endl;
+
+    qInfo().noquote() << appDetails;
+
+    // Try to connect with multiple attempts
+    int retryCount = 0;
+    while (retryCount < MAX_RECONNECT_ATTEMPTS) {
+        try {
+            // Create new connection
+            m_connection = amqp_new_connection();
+            if (!m_connection) {
+                qWarning() << "Failed to create RabbitMQ connection, retrying...";
+                retryCount++;
+                std::this_thread::sleep_for(std::chrono::seconds(RECONNECT_DELAY_SECONDS));
+                continue;
+            }
+
+            // Create socket
+            amqp_socket_t* socket = amqp_tcp_socket_new(m_connection);
+            if (!socket) {
+                qWarning() << "Failed to create RabbitMQ socket, retrying...";
+                amqp_destroy_connection(m_connection);
+                m_connection = nullptr;
+                retryCount++;
+                std::this_thread::sleep_for(std::chrono::seconds(RECONNECT_DELAY_SECONDS));
+                continue;
+            }
+
+            // Open socket
+            int status = amqp_socket_open(socket, m_host.toUtf8().constData(), m_port);
+            if (status != AMQP_STATUS_OK) {
+                qWarning() << "Failed to open RabbitMQ socket, status:" << status << ", retrying...";
+                amqp_destroy_connection(m_connection);
+                m_connection = nullptr;
+                retryCount++;
+                std::this_thread::sleep_for(std::chrono::seconds(RECONNECT_DELAY_SECONDS));
+                continue;
+            }
+
+            // Login
+            amqp_rpc_reply_t login_reply = amqp_login(
+                m_connection,
+                "/", // vhost
+                0,   // channel max
+                131072, // frame max
+                0,  // heartbeat
+                AMQP_SASL_METHOD_PLAIN,
+                m_username.toUtf8().constData(),
+                m_password.toUtf8().constData()
+                );
+
+            if (login_reply.reply_type != AMQP_RESPONSE_NORMAL) {
+                qWarning() << "Failed to login to RabbitMQ, retrying...";
+                amqp_destroy_connection(m_connection);
+                m_connection = nullptr;
+                retryCount++;
+                std::this_thread::sleep_for(std::chrono::seconds(RECONNECT_DELAY_SECONDS));
+                continue;
+            }
+
+            // Open channel
+            amqp_channel_open(m_connection, 1);
+            amqp_rpc_reply_t channel_reply = amqp_get_rpc_reply(m_connection);
+            if (channel_reply.reply_type != AMQP_RESPONSE_NORMAL) {
+                qWarning() << "Failed to open RabbitMQ channel, retrying...";
+                amqp_destroy_connection(m_connection);
+                m_connection = nullptr;
+                retryCount++;
+                std::this_thread::sleep_for(std::chrono::seconds(RECONNECT_DELAY_SECONDS));
+                continue;
+            }
+
+            // Setup exchange and queues
+            if (!setupExchange() || !setupQueues() || !bindQueues()) {
+                disconnect();
+                retryCount++;
+                std::this_thread::sleep_for(std::chrono::seconds(RECONNECT_DELAY_SECONDS));
+                continue;
+            }
+
+            m_connected = true;
+            emit connectionChanged(true);
+
+            // Start worker thread for consuming messages
+            m_threadRunning = true;
+            m_workerThread = new QThread();
+            this->moveToThread(m_workerThread);
+
+            QObject::connect(m_workerThread, &QThread::started, this, &RabbitMQHandler::workerThreadFunction);
+            QObject::connect(m_workerThread, &QThread::finished, this, [this]() {
+                m_threadRunning = false;
+            });
+
+            m_workerThread->start();
+
+            qInfo() << "Successfully connected to RabbitMQ server at" << m_host << ":" << m_port;
+            return true;
+
+        } catch (const std::exception& e) {
+            qWarning() << "Exception during RabbitMQ connection:" << e.what() << ", retrying...";
+
+            if (m_connection) {
+                amqp_destroy_connection(m_connection);
+                m_connection = nullptr;
+            }
+
+            m_connected = false;
+            retryCount++;
+            std::this_thread::sleep_for(std::chrono::seconds(RECONNECT_DELAY_SECONDS));
         }
-
-        // Create socket
-        amqp_socket_t* socket = amqp_tcp_socket_new(m_connection);
-        if (!socket) {
-            qWarning() << "Failed to create RabbitMQ socket";
-            amqp_destroy_connection(m_connection);
-            m_connection = nullptr;
-            return false;
-        }
-
-        // Open socket
-        int status = amqp_socket_open(socket, m_host.toUtf8().constData(), m_port);
-        if (status != AMQP_STATUS_OK) {
-            qWarning() << "Failed to open RabbitMQ socket, status:" << status;
-            amqp_destroy_connection(m_connection);
-            m_connection = nullptr;
-            return false;
-        }
-
-        // Login
-        amqp_rpc_reply_t login_reply = amqp_login(
-            m_connection,
-            "/", // vhost
-            0,   // channel max
-            131072, // frame max
-            30,  // heartbeat
-            AMQP_SASL_METHOD_PLAIN,
-            m_username.toUtf8().constData(),
-            m_password.toUtf8().constData()
-            );
-
-        if (login_reply.reply_type != AMQP_RESPONSE_NORMAL) {
-            qWarning() << "Failed to login to RabbitMQ";
-            amqp_destroy_connection(m_connection);
-            m_connection = nullptr;
-            return false;
-        }
-
-        // Open channel
-        amqp_channel_open(m_connection, 1);
-        amqp_rpc_reply_t channel_reply = amqp_get_rpc_reply(m_connection);
-        if (channel_reply.reply_type != AMQP_RESPONSE_NORMAL) {
-            qWarning() << "Failed to open RabbitMQ channel";
-            amqp_destroy_connection(m_connection);
-            m_connection = nullptr;
-            return false;
-        }
-
-        // Setup exchange and queues
-        if (!setupExchange() || !setupQueues() || !bindQueues()) {
-            disconnect();
-            return false;
-        }
-
-        m_connected = true;
-        emit connectionChanged(true);
-
-        // Start worker thread for consuming messages
-        m_threadRunning = true;
-        m_workerThread = new QThread();
-        this->moveToThread(m_workerThread);
-
-        QObject::connect(m_workerThread, &QThread::started, this, &RabbitMQHandler::workerThreadFunction);
-        QObject::connect(m_workerThread, &QThread::finished, this, [this]() {
-            m_threadRunning = false;
-        });
-
-        m_workerThread->start();
-
-        qInfo() << "Connected to RabbitMQ server at" << m_host << ":" << m_port;
-        return true;
-
-    } catch (const std::exception& e) {
-        qWarning() << "Exception during RabbitMQ connection:" << e.what();
-
-        if (m_connection) {
-            amqp_destroy_connection(m_connection);
-            m_connection = nullptr;
-        }
-
-        m_connected = false;
-        return false;
     }
+
+    qCritical() << "Failed to establish a connection to RabbitMQ after"
+                << MAX_RECONNECT_ATTEMPTS << "attempts.";
+    return false;
 }
 
 void RabbitMQHandler::disconnect()
@@ -210,51 +258,58 @@ bool RabbitMQHandler::sendResponse(const QJsonObject& message)
         return false;
     }
 
-    try {
-        // Convert message to JSON
-        QJsonDocument doc(message);
-        QByteArray data = doc.toJson(QJsonDocument::Compact);
+    QByteArray data = QJsonDocument(message).toJson(QJsonDocument::Compact);
 
-        // Properties
-        amqp_basic_properties_t props;
-        props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG | AMQP_BASIC_MESSAGE_ID_FLAG;
-        props.content_type = amqp_cstring_bytes("application/json");
-        props.delivery_mode = 2; // persistent delivery mode
+    int retries = MAX_SEND_COMMAND_RETRIES;
+    while (retries > 0) {
+        try {
+            // Properties
+            amqp_basic_properties_t props;
+            props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG | AMQP_BASIC_MESSAGE_ID_FLAG;
+            props.content_type = amqp_cstring_bytes("application/json");
+            props.delivery_mode = 2; // persistent delivery mode
 
-        // Generate message ID if not present
-        QString messageId = message.contains("message_id") ?
-                                message["message_id"].toString() :
-                                QUuid::createUuid().toString();
+            // Generate message ID if not present
+            QString messageId = message.contains("message_id") ?
+                                    message["message_id"].toString() :
+                                    QUuid::createUuid().toString();
 
-        QByteArray messageIdBytes = messageId.toUtf8();
-        props.message_id = amqp_bytes_malloc_dup(amqp_cstring_bytes(messageIdBytes.constData()));
+            QByteArray messageIdBytes = messageId.toUtf8();
+            props.message_id = amqp_bytes_malloc_dup(amqp_cstring_bytes(messageIdBytes.constData()));
 
-        // Publish message
-        int status = amqp_basic_publish(
-            m_connection,
-            1, // channel
-            amqp_cstring_bytes(m_exchangeName.toUtf8().constData()),
-            amqp_cstring_bytes(m_responseRoutingKey.toUtf8().constData()),
-            0, // mandatory
-            0, // immediate
-            &props,
-            amqp_bytes_malloc_dup(amqp_cstring_bytes(data.constData()))
-            );
+            // Publish message
+            int status = amqp_basic_publish(
+                m_connection,
+                1, // channel
+                amqp_cstring_bytes(m_exchangeName.toUtf8().constData()),
+                amqp_cstring_bytes(m_responseRoutingKey.toUtf8().constData()),
+                0, // mandatory
+                0, // immediate
+                &props,
+                amqp_bytes_malloc_dup(amqp_cstring_bytes(data.constData()))
+                );
 
-        // Free allocated memory
-        amqp_bytes_free(props.message_id);
+            // Free allocated memory
+            amqp_bytes_free(props.message_id);
 
-        if (status != AMQP_STATUS_OK) {
-            qWarning() << "Failed to publish message, status:" << status;
-            return false;
+            if (status != AMQP_STATUS_OK) {
+                qWarning() << "Failed to publish message, status:" << status << ", retrying...";
+                retries--;
+                QThread::msleep(1000); // Wait 1 second before retrying
+                continue;
+            }
+
+            qDebug() << "Published response to" << m_responseRoutingKey << "with size" << data.size() << "bytes";
+            return true;
+        } catch (const std::exception& e) {
+            qWarning() << "Exception during RabbitMQ publish:" << e.what() << ", retrying...";
+            retries--;
+            QThread::msleep(1000); // Wait 1 second before retrying
         }
-
-        qDebug() << "Published response to" << m_responseRoutingKey << "with size" << data.size() << "bytes";
-        return true;
-    } catch (const std::exception& e) {
-        qWarning() << "Exception during RabbitMQ publish:" << e.what();
-        return false;
     }
+
+    qCritical() << "Failed to publish message to RabbitMQ after" << MAX_SEND_COMMAND_RETRIES << "attempts.";
+    return false;
 }
 
 bool RabbitMQHandler::setupExchange()
@@ -266,10 +321,10 @@ bool RabbitMQHandler::setupExchange()
             1, // channel
             amqp_cstring_bytes(m_exchangeName.toUtf8().constData()),
             amqp_cstring_bytes("topic"),
-            0, // passive
-            1, // durable
-            0, // auto delete
-            0, // internal
+            0, // passive (false)
+            1, // durable (true)
+            0, // auto delete (false)
+            0, // internal (false)
             amqp_empty_table
             );
 
@@ -295,10 +350,10 @@ bool RabbitMQHandler::setupQueues()
             m_connection,
             1, // channel
             amqp_cstring_bytes(m_commandQueueName.toUtf8().constData()),
-            0, // passive
-            1, // durable
-            0, // exclusive
-            0, // auto delete
+            0, // passive (false)
+            1, // durable (true)
+            0, // exclusive (false)
+            0, // auto delete (false)
             amqp_empty_table
             );
 
@@ -313,10 +368,10 @@ bool RabbitMQHandler::setupQueues()
             m_connection,
             1, // channel
             amqp_cstring_bytes(m_responseQueueName.toUtf8().constData()),
-            0, // passive
-            1, // durable
-            0, // exclusive
-            0, // auto delete
+            0, // passive (false)
+            1, // durable (true)
+            0, // exclusive (false)
+            0, // auto delete (false)
             amqp_empty_table
             );
 

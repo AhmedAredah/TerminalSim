@@ -1,5 +1,4 @@
 #pragma once
-
 #include <QObject>
 #include <QJsonObject>
 #include <QString>
@@ -16,7 +15,6 @@ namespace TerminalSim {
  */
 class RabbitMQHandler : public QObject {
     Q_OBJECT
-
 public:
     /**
      * @brief Construct a RabbitMQ handler
@@ -72,6 +70,16 @@ signals:
     void connectionChanged(bool connected);
 
 private:
+    // Setup methods
+    bool setupExchange();
+    bool setupQueues();
+    bool bindQueues();
+    void startConsuming();
+    void processReceivedMessages();
+
+    // Worker thread method
+    void workerThreadFunction();
+
     // RabbitMQ connection state and settings
     amqp_connection_state_t m_connection;
     bool m_connected;
@@ -98,18 +106,8 @@ private:
     QMutex m_commandQueueMutex;
     QWaitCondition m_commandQueueCondition;
 
-    // Private methods for RabbitMQ operations
-    bool setupExchange();
-    bool setupQueues();
-    bool bindQueues();
-    void startConsuming();
-    void processReceivedMessages();
-
     // Thread safety
     mutable QMutex m_mutex;
-
-    // Worker thread method
-    void workerThreadFunction();
 };
 
 } // namespace TerminalSim
