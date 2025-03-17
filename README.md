@@ -229,7 +229,7 @@ int main() {
 ## Project Structure
 
 ```
-terminal-simulation/
+terminalSim/
 ├── CMakeLists.txt                  # Main CMake file
 ├── src/                            # Source code directory
 │   ├── common/                     # Common definitions and utilities
