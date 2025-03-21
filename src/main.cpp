@@ -6,18 +6,53 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QDir>
+#include <QLocalSocket>
+#include <QLocalServer>
 
 #include "server/terminal_graph_server.h"
+
+
+bool isAnotherInstanceRunning(const QString &serverName) {
+    QLocalSocket socket;
+    socket.connectToServer(serverName);
+    if (socket.waitForConnected(100)) {
+        return true; // Another instance is already running
+    }
+    return false; // No instance running
+}
+
+void createLocalServer(const QString &serverName) {
+    QLocalServer *localServer = new QLocalServer();
+    localServer->setSocketOptions(QLocalServer::WorldAccessOption);
+    if (!localServer->listen(serverName)) {
+        qCritical() << "Failed to create local server:"
+                    << localServer->errorString();
+        exit(EXIT_FAILURE);
+    }
+}
 
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
-    QCoreApplication::setApplicationName("TerminalSimulation");
+    QCoreApplication::setApplicationName("TerminalSim");
     QCoreApplication::setApplicationVersion("1.0.0");
+
+    // Unique name for the local server
+    const QString uniqueServerName = "TerminalSimServerInstance";
+
+    // Check if another instance is already running
+    if (isAnotherInstanceRunning(uniqueServerName)) {
+        qCritical() << "Another instance of TerminalSim "
+                       "Server is already running.";
+        return EXIT_FAILURE;
+    }
+
+    // Create the local server to mark this instance as the active one
+    createLocalServer(uniqueServerName);
     
     // Command line parsing
     QCommandLineParser parser;
-    parser.setApplicationDescription("Terminal Simulation Server");
+    parser.setApplicationDescription("TerminalSim Server");
     parser.addHelpOption();
     parser.addVersionOption();
     
@@ -85,7 +120,7 @@ int main(int argc, char *argv[])
         dataDir.mkpath(".");
     }
     
-    qDebug() << "Starting Terminal Simulation Server...";
+    qDebug() << "Starting TerminalSim Server...";
     qDebug() << "RabbitMQ Host:" << rabbitHost;
     qDebug() << "RabbitMQ Port:" << rabbitPort;
     qDebug() << "Data Path:" << dataPath;
@@ -103,7 +138,8 @@ int main(int argc, char *argv[])
     }
     
     // Connect to RabbitMQ
-    if (!server->initialize(rabbitHost, rabbitPort, rabbitUser, rabbitPassword)) {
+    if (!server->initialize(rabbitHost, rabbitPort,
+                            rabbitUser, rabbitPassword)) {
         qCritical() << "Failed to initialize server. Exiting.";
         return 1;
     }

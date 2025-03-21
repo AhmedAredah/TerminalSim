@@ -70,6 +70,7 @@ private:
     QVariant handlePing(const QVariantMap& params);
     QVariant handleSerializeGraph(const QVariantMap& params);
     QVariant handleDeserializeGraph(const QVariantMap& params);
+    QVariant handleResetServer(const QVariantMap& params);
     QVariant handleAddTerminal(const QVariantMap& params);
     QVariant handleAddRoute(const QVariantMap& params);
     QVariant handleFindShortestPath(const QVariantMap& params);

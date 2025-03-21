@@ -20,7 +20,8 @@ namespace TerminalSim {
 TerminalGraphServer* TerminalGraphServer::s_instance = nullptr;
 QMutex TerminalGraphServer::s_instanceMutex;
 
-TerminalGraphServer* TerminalGraphServer::getInstance(const QString& pathToTerminalsDirectory)
+TerminalGraphServer*
+TerminalGraphServer::getInstance(const QString& pathToTerminalsDirectory)
 {
     QMutexLocker locker(&s_instanceMutex);
     
@@ -31,16 +32,19 @@ TerminalGraphServer* TerminalGraphServer::getInstance(const QString& pathToTermi
     return s_instance;
 }
 
-TerminalGraphServer::TerminalGraphServer(const QString& pathToTerminalsDirectory)
+TerminalGraphServer::TerminalGraphServer(
+    const QString& pathToTerminalsDirectory)
     : QObject(nullptr),
-      m_graph(new TerminalGraph(pathToTerminalsDirectory)),
-      m_pathToTerminalsDirectory(pathToTerminalsDirectory),
-      m_rabbitMQHandler(nullptr),
-      m_commandProcessor(nullptr),
-      m_serverId(QUuid::createUuid().toString())
+    m_graph(new TerminalGraph(pathToTerminalsDirectory)),
+    m_pathToTerminalsDirectory(pathToTerminalsDirectory),
+    m_rabbitMQHandler(nullptr),
+    m_commandProcessor(nullptr),
+    m_serverId(QUuid::createUuid().toString())
 {
     qDebug() << "Terminal Graph Server created with ID:" << m_serverId
-            << "and terminal directory:" << (!pathToTerminalsDirectory.isEmpty() ? pathToTerminalsDirectory : "None");
+             << "and terminal directory:"
+             << (!pathToTerminalsDirectory.isEmpty() ?
+                     pathToTerminalsDirectory : "None");
     
     // Create command processor
     m_commandProcessor = new CommandProcessor(m_graph, this);
@@ -85,7 +89,7 @@ bool TerminalGraphServer::initialize(
         // Connect signals
         connect(m_rabbitMQHandler, &RabbitMQHandler::connectionChanged,
                 this, &TerminalGraphServer::connectionChanged);
-                
+
         connect(m_rabbitMQHandler, &RabbitMQHandler::commandReceived,
                 this, &TerminalGraphServer::onMessageReceived);
     }
@@ -96,12 +100,13 @@ bool TerminalGraphServer::initialize(
         rabbitMQPort, 
         rabbitMQUser, 
         rabbitMQPassword
-    );
+        );
     
     if (connected) {
         
-        qDebug() << "Terminal Graph Server initialized and connected to RabbitMQ at"
-                << rabbitMQHost << ":" << rabbitMQPort;
+        qDebug() << "Terminal Graph Server initialized "
+                    "and connected to RabbitMQ at"
+                 << rabbitMQHost << ":" << rabbitMQPort;
     } else {
         qWarning() << "Failed to connect to RabbitMQ at"
                    << rabbitMQHost << ":" << rabbitMQPort;
@@ -122,7 +127,9 @@ void TerminalGraphServer::shutdown()
     }
     
     // Signal application to quit
-    QTimer::singleShot(0, QCoreApplication::instance(), &QCoreApplication::quit);
+    QTimer::singleShot(0,
+                       QCoreApplication::instance(),
+                       &QCoreApplication::quit);
 }
 
 bool TerminalGraphServer::isConnected() const
@@ -153,7 +160,9 @@ bool TerminalGraphServer::deserializeGraph(const QJsonObject& graphData)
     
     try {
         // Create a new graph from the data
-        TerminalGraph* newGraph = TerminalGraph::deserializeGraph(graphData, m_pathToTerminalsDirectory);
+        TerminalGraph* newGraph =
+            TerminalGraph::deserializeGraph(graphData,
+                                            m_pathToTerminalsDirectory);
         
         // Store the old graph for deletion
         TerminalGraph* oldGraph = m_graph;
@@ -226,7 +235,8 @@ bool TerminalGraphServer::loadGraph(const QString& filepath)
         try {
             QFile file(filepath);
             if (!file.open(QIODevice::ReadOnly)) {
-                qWarning() << "Failed to open file for reading:" << filepath;
+                qWarning() << "Failed to open file for reading:"
+                           << filepath;
                 return false;
             }
 
@@ -237,12 +247,14 @@ bool TerminalGraphServer::loadGraph(const QString& filepath)
             QJsonDocument doc = QJsonDocument::fromJson(data, &error);
 
             if (error.error != QJsonParseError::NoError) {
-                qWarning() << "Failed to parse JSON from file:" << error.errorString();
+                qWarning() << "Failed to parse JSON from file:"
+                           << error.errorString();
                 return false;
             }
 
             if (!doc.isObject()) {
-                qWarning() << "Invalid JSON format: root element is not an object";
+                qWarning() << "Invalid JSON format: root element "
+                              "is not an object";
                 return false;
             }
 
@@ -257,7 +269,9 @@ bool TerminalGraphServer::loadGraph(const QString& filepath)
     return deserializeGraph(graphData);
 }
 
-QVariant TerminalGraphServer::processCommand(const QString& command, const QVariantMap& params)
+QVariant
+TerminalGraphServer::processCommand(const QString& command,
+                                    const QVariantMap& params)
 {
     QMutexLocker locker(&m_mutex);
     
@@ -277,7 +291,8 @@ void TerminalGraphServer::onMessageReceived(const QJsonObject& message)
     emit messageReceived(message);
     
     if (!m_commandProcessor || !m_rabbitMQHandler) {
-        qWarning() << "Cannot process message: command processor or RabbitMQ handler is null";
+        qWarning() << "Cannot process message: command processor or "
+                      "RabbitMQ handler is null";
         return;
     }
     
@@ -296,7 +311,8 @@ void TerminalGraphServer::onMessageReceived(const QJsonObject& message)
         }
         
         // Add processed timestamp
-        response["processed_timestamp"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+        response["processed_timestamp"] =
+            QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
     } catch (const std::exception& e) {
         // Create error response
         response["success"] = false;
@@ -311,7 +327,8 @@ void TerminalGraphServer::onMessageReceived(const QJsonObject& message)
             response["request_id"] = message["request_id"];
         }
         
-        response["processed_timestamp"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+        response["processed_timestamp"] =
+            QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
     }
     
     // Emit signal for monitoring

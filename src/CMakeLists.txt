@@ -17,6 +17,7 @@ target_link_libraries(terminal_simulation
     Container::Container
     Qt6::Core
     Qt6::Concurrent
+    Qt6::Network
 )
 
 # Install the executable

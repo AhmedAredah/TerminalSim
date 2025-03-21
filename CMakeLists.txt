@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(TerminalSimulation VERSION 1.0.0 LANGUAGES CXX)
+project(TerminalSim VERSION 1.0.0 LANGUAGES CXX)
 
 # Enable Qt features
 set(CMAKE_AUTOMOC ON)
@@ -22,7 +22,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Find Qt packages
-find_package(Qt6 COMPONENTS Core Concurrent Test REQUIRED)
+find_package(Qt6 COMPONENTS Core Concurrent Network Test REQUIRED)
 
 # Find Container library
 if(WIN32)
@@ -116,7 +116,7 @@ install(TARGETS terminal_simulation
 # Package configuration
 include(InstallRequiredSystemLibraries)
 set(CPACK_PACKAGE_VENDOR "Virginia Tech Transportation Institute - Center for Sustainable Mobility.")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Terminal Simulation - A C++ library for simulating container terminals")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "TerminalSim - A C++ library for simulating container terminals")
 set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
 set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
 set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})

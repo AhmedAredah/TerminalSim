@@ -15,7 +15,8 @@ CommandProcessor::CommandProcessor(TerminalGraph* graph, QObject* parent)
     : QObject(parent), m_graph(graph)
 {
     registerCommands();
-    qDebug() << "Command processor initialized with" << m_commandHandlers.size() << "command handlers";
+    qDebug() << "Command processor initialized with"
+             << m_commandHandlers.size() << "command handlers";
 }
 
 CommandProcessor::~CommandProcessor()
@@ -26,25 +27,40 @@ CommandProcessor::~CommandProcessor()
 void CommandProcessor::registerCommands()
 {
     // System commands
-    registerCommand("ping", [this](const QVariantMap& params) { return handlePing(params); });
-    registerCommand("serialize_graph", [this](const QVariantMap& params) { return handleSerializeGraph(params); });
-    registerCommand("deserialize_graph", [this](const QVariantMap& params) { return handleDeserializeGraph(params); });
+    registerCommand("ping",
+                    [this](const QVariantMap& params)
+                    { return handlePing(params); });
+    registerCommand("serialize_graph",
+                    [this](const QVariantMap& params)
+                    { return handleSerializeGraph(params); });
+    registerCommand("deserialize_graph",
+                    [this](const QVariantMap& params)
+                    { return handleDeserializeGraph(params); });
+
+    registerCommand("resetServer",
+                    [this](const QVariantMap& params)
+                    { return handleResetServer(params); });
     
     // Terminal commands
-    registerCommand("add_terminal", [this](const QVariantMap& params) { return handleAddTerminal(params); });
-    registerCommand("add_alias_to_terminal", [this](const QVariantMap& params) {
+    registerCommand("add_terminal",
+                    [this](const QVariantMap& params)
+                    { return handleAddTerminal(params); });
+    registerCommand("add_alias_to_terminal",
+                    [this](const QVariantMap& params) {
         QString terminalName = params.value("terminal_name").toString();
         QString alias = params.value("alias").toString();
         
         if (terminalName.isEmpty() || alias.isEmpty()) {
-            throw std::invalid_argument("Terminal name and alias must be provided");
+            throw std::invalid_argument("Terminal name and alias "
+                                        "must be provided");
         }
         
         m_graph->addAliasToTerminal(terminalName, alias);
         return QVariant(true);
     });
     
-    registerCommand("get_aliases_of_terminal", [this](const QVariantMap& params) {
+    registerCommand("get_aliases_of_terminal",
+                    [this](const QVariantMap& params) {
         QString terminalName = params.value("terminal_name").toString();
         
         if (terminalName.isEmpty()) {
@@ -73,33 +89,45 @@ void CommandProcessor::registerCommands()
         return m_graph->getTerminalStatus(terminalName);
     });
     
-    registerCommand("get_terminal", [this](const QVariantMap& params) { return handleGetTerminal(params); });
+    registerCommand("get_terminal",
+                    [this](const QVariantMap& params)
+                    { return handleGetTerminal(params); });
     
     // Route commands
-    registerCommand("add_route", [this](const QVariantMap& params) { return handleAddRoute(params); });
+    registerCommand("add_route",
+                    [this](const QVariantMap& params)
+                    { return handleAddRoute(params); });
     
-    registerCommand("change_route_weight", [this](const QVariantMap& params) {
+    registerCommand("change_route_weight",
+                    [this](const QVariantMap& params) {
         QString startTerminal = params.value("start_terminal").toString();
         QString endTerminal = params.value("end_terminal").toString();
         int modeInt = params.value("mode", 0).toInt();
         QVariantMap newAttributes = params.value("attributes").toMap();
         
-        if (startTerminal.isEmpty() || endTerminal.isEmpty() || newAttributes.isEmpty()) {
-            throw std::invalid_argument("Start terminal, end terminal, and attributes must be provided");
+        if (startTerminal.isEmpty() ||
+            endTerminal.isEmpty() ||
+            newAttributes.isEmpty()) {
+            throw std::invalid_argument("Start terminal, end terminal, "
+                                        "and attributes must be provided");
         }
         
-        TransportationMode mode = static_cast<TransportationMode>(modeInt);
-        m_graph->changeRouteWeight(startTerminal, endTerminal, mode, newAttributes);
+        TransportationMode mode =
+            static_cast<TransportationMode>(modeInt);
+        m_graph->changeRouteWeight(startTerminal, endTerminal,
+                                   mode, newAttributes);
         return QVariant(true);
     });
     
     // Auto-connection commands
-    registerCommand("connect_terminals_by_interface_modes", [this](const QVariantMap&) {
+    registerCommand("connect_terminals_by_interface_modes",
+                    [this](const QVariantMap&) {
         m_graph->connectTerminalsByInterfaceModes();
         return QVariant(true);
     });
     
-    registerCommand("connect_terminals_in_region_by_mode", [this](const QVariantMap& params) {
+    registerCommand("connect_terminals_in_region_by_mode",
+                    [this](const QVariantMap& params) {
         QString region = params.value("region").toString();
         
         if (region.isEmpty()) {
@@ -110,20 +138,28 @@ void CommandProcessor::registerCommands()
         return QVariant(true);
     });
     
-    registerCommand("connect_regions_by_mode", [this](const QVariantMap& params) {
+    registerCommand("connect_regions_by_mode",
+                    [this](const QVariantMap& params) {
         int modeInt = params.value("mode", 0).toInt();
-        TransportationMode mode = static_cast<TransportationMode>(modeInt);
+        TransportationMode mode =
+            static_cast<TransportationMode>(modeInt);
         
         m_graph->connectRegionsByMode(mode);
         return QVariant(true);
     });
     
     // Path finding commands
-    registerCommand("find_shortest_path", [this](const QVariantMap& params) { return handleFindShortestPath(params); });
-    registerCommand("find_top_paths", [this](const QVariantMap& params) { return handleFindTopPaths(params); });
+    registerCommand("find_shortest_path",
+                    [this](const QVariantMap& params)
+                    { return handleFindShortestPath(params); });
+    registerCommand("find_top_paths",
+                    [this](const QVariantMap& params)
+                    { return handleFindTopPaths(params); });
     
     // Terminal container operations
-    registerCommand("add_container", [this](const QVariantMap& params) { return handleAddContainer(params); });
+    registerCommand("add_container",
+                    [this](const QVariantMap& params)
+                    { return handleAddContainer(params); });
     
     registerCommand("add_containers", [this](const QVariantMap& params) {
         QString terminalId = params.value("terminal_id").toString();
@@ -139,7 +175,9 @@ void CommandProcessor::registerCommands()
         
         QVariantList containersList = params.value("containers").toList();
         for (const QVariant& containerVar : containersList) {
-            QJsonObject containerJson = QJsonDocument::fromJson(containerVar.toString().toUtf8()).object();
+            QJsonObject containerJson =
+                QJsonDocument::fromJson(
+                    containerVar.toString().toUtf8()).object();
             ContainerCore::Container container(containerJson);
             containers.append(container);
         }
@@ -148,13 +186,15 @@ void CommandProcessor::registerCommands()
         return QVariant(true);
     });
     
-    registerCommand("add_containers_from_json", [this](const QVariantMap& params) {
+    registerCommand("add_containers_from_json",
+                    [this](const QVariantMap& params) {
         QString terminalId = params.value("terminal_id").toString();
         double addingTime = params.value("adding_time", -1).toDouble();
         QString jsonStr = params.value("containers_json").toString();
         
         if (terminalId.isEmpty() || jsonStr.isEmpty()) {
-            throw std::invalid_argument("Terminal ID and containers JSON must be provided");
+            throw std::invalid_argument("Terminal ID and containers "
+                                        "JSON must be provided");
         }
         
         Terminal* terminal = getTerminalFromParams(params);
@@ -168,7 +208,8 @@ void CommandProcessor::registerCommands()
         return QVariant(true);
     });
     
-    registerCommand("get_containers_by_departing_time", [this](const QVariantMap& params) {
+    registerCommand("get_containers_by_departing_time",
+                    [this](const QVariantMap& params) {
         QString terminalId = params.value("terminal_id").toString();
         double departingTime = params.value("departing_time").toDouble();
         QString condition = params.value("condition", "<").toString();
@@ -182,13 +223,15 @@ void CommandProcessor::registerCommands()
         return terminal->getContainersByDepatingTime(departingTime, condition);
     });
     
-    registerCommand("get_containers_by_added_time", [this](const QVariantMap& params) {
+    registerCommand("get_containers_by_added_time",
+                    [this](const QVariantMap& params) {
         QString terminalId = params.value("terminal_id").toString();
         double addedTime = params.value("added_time").toDouble();
         QString condition = params.value("condition").toString();
         
         if (terminalId.isEmpty() || condition.isEmpty()) {
-            throw std::invalid_argument("Terminal ID and condition must be provided");
+            throw std::invalid_argument("Terminal ID and condition "
+                                        "must be provided");
         }
         
         Terminal* terminal = getTerminalFromParams(params);
@@ -196,12 +239,14 @@ void CommandProcessor::registerCommands()
         return terminal->getContainersByAddedTime(addedTime, condition);
     });
     
-    registerCommand("get_containers_by_next_destination", [this](const QVariantMap& params) {
+    registerCommand("get_containers_by_next_destination",
+                    [this](const QVariantMap& params) {
         QString terminalId = params.value("terminal_id").toString();
         QString destination = params.value("destination").toString();
         
         if (terminalId.isEmpty() || destination.isEmpty()) {
-            throw std::invalid_argument("Terminal ID and destination must be provided");
+            throw std::invalid_argument("Terminal ID and destination "
+                                        "must be provided");
         }
         
         Terminal* terminal = getTerminalFromParams(params);
@@ -209,12 +254,14 @@ void CommandProcessor::registerCommands()
         return terminal->getContainersByNextDestination(destination);
     });
     
-    registerCommand("dequeue_containers_by_next_destination", [this](const QVariantMap& params) {
+    registerCommand("dequeue_containers_by_next_destination",
+                    [this](const QVariantMap& params) {
         QString terminalId = params.value("terminal_id").toString();
         QString destination = params.value("destination").toString();
         
         if (terminalId.isEmpty() || destination.isEmpty()) {
-            throw std::invalid_argument("Terminal ID and destination must be provided");
+            throw std::invalid_argument("Terminal ID and destination must "
+                                        "be provided");
         }
         
         Terminal* terminal = getTerminalFromParams(params);
@@ -234,7 +281,8 @@ void CommandProcessor::registerCommands()
         return QVariant(terminal->getContainerCount());
     });
     
-    registerCommand("get_available_capacity", [this](const QVariantMap& params) {
+    registerCommand("get_available_capacity",
+                    [this](const QVariantMap& params) {
         QString terminalId = params.value("terminal_id").toString();
         
         if (terminalId.isEmpty()) {
@@ -272,22 +320,26 @@ void CommandProcessor::registerCommands()
     });
 }
 
-void CommandProcessor::registerCommand(const QString& command, CommandHandler handler)
+void CommandProcessor::registerCommand(const QString& command,
+                                       CommandHandler handler)
 {
     QMutexLocker locker(&m_mutex);
     m_commandHandlers[command] = handler;
 }
 
-QVariant CommandProcessor::processCommand(const QString& command, const QVariantMap& params)
+QVariant CommandProcessor::processCommand(const QString& command,
+                                          const QVariantMap& params)
 {
     QMutexLocker locker(&m_mutex);
 
-    qDebug() << "Processing command:" << command << "with params:" << params;
+    qDebug() << "Processing command:" << command
+             << "with params:" << params;
 
     // Check if command exists
     if (!m_commandHandlers.contains(command)) {
         qWarning() << "Unknown command:" << command;
-        throw std::invalid_argument(QString("Unknown command: %1").arg(command).toStdString());
+        throw std::invalid_argument(
+            QString("Unknown command: %1").arg(command).toStdString());
     }
 
     // Execute command handler
@@ -303,17 +355,20 @@ QVariant CommandProcessor::processCommand(const QString& command, const QVariant
 
         return serializedResult;
     } catch (const std::exception& e) {
-        qWarning() << "Error processing command" << command << ":" << e.what();
+        qWarning() << "Error processing command" << command
+                   << ":" << e.what();
         throw;
     }
 }
 
-QJsonObject CommandProcessor::processJsonCommand(const QJsonObject& commandObject)
+QJsonObject
+CommandProcessor::processJsonCommand(const QJsonObject& commandObject)
 {
     QJsonObject response;
     
     // Extract command and parameters
-    if (!commandObject.contains("command") || !commandObject["command"].isString()) {
+    if (!commandObject.contains("command") ||
+        !commandObject["command"].isString()) {
         response["success"] = false;
         response["error"] = "Missing or invalid command";
         return response;
@@ -322,7 +377,8 @@ QJsonObject CommandProcessor::processJsonCommand(const QJsonObject& commandObjec
     QString command = commandObject["command"].toString();
     QVariantMap params;
     
-    if (commandObject.contains("params") && commandObject["params"].isObject()) {
+    if (commandObject.contains("params") &&
+        commandObject["params"].isObject()) {
         params = commandObject["params"].toObject().toVariantMap();
     }
     
@@ -335,7 +391,8 @@ QJsonObject CommandProcessor::processJsonCommand(const QJsonObject& commandObjec
     }
     
     // Add timestamp
-    response["timestamp"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    response["timestamp"] =
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
     
     // Process command
     try {
@@ -361,7 +418,8 @@ Terminal* CommandProcessor::getTerminalFromParams(const QVariantMap& params)
     try {
         return m_graph->getTerminal(terminalId);
     } catch (const std::exception& e) {
-        throw std::invalid_argument(QString("Terminal not found: %1").arg(terminalId).toStdString());
+        throw std::invalid_argument(
+            QString("Terminal not found: %1").arg(terminalId).toStdString());
     }
 }
 
@@ -369,7 +427,8 @@ QVariant CommandProcessor::handlePing(const QVariantMap& params)
 {
     QVariantMap response;
     response["status"] = "ok";
-    response["timestamp"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    response["timestamp"] =
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
     
     if (params.contains("echo")) {
         response["echo"] = params["echo"];
@@ -395,8 +454,9 @@ QVariant CommandProcessor::handleDeserializeGraph(const QVariantMap& params)
     
     // Create a new graph from the data
     TerminalGraph* newGraph =
-        TerminalGraph::deserializeGraph(jsonGraphData,
-                                        m_graph->getPathToTerminalsDirectory());
+        TerminalGraph::deserializeGraph(
+        jsonGraphData,
+        m_graph->getPathToTerminalsDirectory());
     
     // Replace old graph implementation with new one
     QMutexLocker locker(&m_mutex);
@@ -415,11 +475,43 @@ QVariant CommandProcessor::handleDeserializeGraph(const QVariantMap& params)
     return true;
 }
 
+QVariant CommandProcessor::handleResetServer(const QVariantMap &params)
+{
+    Q_UNUSED(params); // Mark params as unused
+
+    QMutexLocker locker(&m_mutex);
+
+    // Clear the existing graph
+    m_graph->clear();
+
+    // Reinitialize any default settings
+    // reset default link attributes or cost function parameters
+    m_graph->setLinkDefaultAttributes({
+        {"cost", 1.0},
+        {"travellTime", 1.0},
+        {"distance", 1.0},
+        {"carbonEmissions", 1.0},
+        {"risk", 1.0},
+        {"energyConsumption", 1.0}
+    });
+
+    qInfo() << "Server reset: Terminal graph cleared "
+               "and reinitialized to fresh state";
+
+    // Return success
+    QVariantMap response;
+    response["status"] = "success";
+    response["message"] = "Server has been reset to a fresh state";
+    return response;
+}
+
 QVariant CommandProcessor::handleAddTerminal(const QVariantMap& params)
 {
-    if (!params.contains("terminal_names") || !params.contains("custom_config") ||
+    if (!params.contains("terminal_names") ||
+        !params.contains("custom_config") ||
         !params.contains("terminal_interfaces")) {
-        throw std::invalid_argument("Missing required parameters for add_terminal");
+        throw std::invalid_argument("Missing required parameters "
+                                    "for add_terminal");
     }
     
     // Extract terminal names
@@ -433,11 +525,13 @@ QVariant CommandProcessor::handleAddTerminal(const QVariantMap& params)
         // List of names
         terminalNames = terminalNamesVar.toStringList();
     } else {
-        throw std::invalid_argument("terminal_names must be a string or list of strings");
+        throw std::invalid_argument("terminal_names must be a string or "
+                                    "list of strings");
     }
     
     if (terminalNames.isEmpty()) {
-        throw std::invalid_argument("At least one terminal name must be provided");
+        throw std::invalid_argument("At least one terminal name must "
+                                    "be provided");
     }
     
     // Extract custom config
@@ -447,7 +541,8 @@ QVariant CommandProcessor::handleAddTerminal(const QVariantMap& params)
     QVariantMap interfacesMap = params["terminal_interfaces"].toMap();
     QMap<TerminalInterface, QSet<TransportationMode>> terminalInterfaces;
     
-    for (auto it = interfacesMap.constBegin(); it != interfacesMap.constEnd(); ++it) {
+    for (auto it = interfacesMap.constBegin();
+         it != interfacesMap.constEnd(); ++it) {
         // Convert interface string/int to enum
         TerminalInterface interface;
         bool ok = false;
@@ -470,7 +565,8 @@ QVariant CommandProcessor::handleAddTerminal(const QVariantMap& params)
             if (modeVar.canConvert<int>()) {
                 mode = static_cast<TransportationMode>(modeVar.toInt());
             } else if (modeVar.canConvert<QString>()) {
-                mode = EnumUtils::stringToTransportationMode(modeVar.toString());
+                mode =
+                    EnumUtils::stringToTransportationMode(modeVar.toString());
             } else {
                 continue;
             }
@@ -484,23 +580,27 @@ QVariant CommandProcessor::handleAddTerminal(const QVariantMap& params)
     }
     
     if (terminalInterfaces.isEmpty()) {
-        throw std::invalid_argument("At least one terminal interface with modes must be provided");
+        throw std::invalid_argument("At least one terminal interface with "
+                                    "modes must be provided");
     }
     
     // Extract region (optional)
     QString region = params.value("region").toString();
     
     // Add terminal to graph
-    m_graph->addTerminal(terminalNames, customConfig, terminalInterfaces, region);
+    m_graph->addTerminal(terminalNames, customConfig,
+                         terminalInterfaces, region);
     
     return true;
 }
 
 QVariant CommandProcessor::handleAddRoute(const QVariantMap& params)
 {
-    if (!params.contains("route_id") || !params.contains("start_terminal") ||
+    if (!params.contains("route_id") ||
+        !params.contains("start_terminal") ||
         !params.contains("end_terminal") || !params.contains("mode")) {
-        throw std::invalid_argument("Missing required parameters for add_route");
+        throw std::invalid_argument("Missing required parameters for "
+                                    "add_route");
     }
     
     QString routeId = params["route_id"].toString();
@@ -521,7 +621,8 @@ QVariant CommandProcessor::handleAddRoute(const QVariantMap& params)
     
     // Extract attributes (optional)
     QVariantMap attributes;
-    if (params.contains("attributes") && params["attributes"].canConvert<QVariantMap>()) {
+    if (params.contains("attributes") &&
+        params["attributes"].canConvert<QVariantMap>()) {
         attributes = params["attributes"].toMap();
     }
     
@@ -545,8 +646,10 @@ QVariant CommandProcessor::handleGetTerminal(const QVariantMap& params)
 
 QVariant CommandProcessor::handleFindShortestPath(const QVariantMap& params)
 {
-    if (!params.contains("start_terminal") || !params.contains("end_terminal")) {
-        throw std::invalid_argument("Missing start_terminal or end_terminal parameter");
+    if (!params.contains("start_terminal") ||
+        !params.contains("end_terminal")) {
+        throw std::invalid_argument("Missing start_terminal or"
+                                    " end_terminal parameter");
     }
     
     QString startTerminal = params["start_terminal"].toString();
@@ -565,20 +668,24 @@ QVariant CommandProcessor::handleFindShortestPath(const QVariantMap& params)
     }
     
     // Check if we need to restrict by regions
-    if (params.contains("allowed_regions") && params["allowed_regions"].canConvert<QStringList>()) {
+    if (params.contains("allowed_regions") &&
+        params["allowed_regions"].canConvert<QStringList>()) {
         QStringList allowedRegions = params["allowed_regions"].toStringList();
         
         return QVariant::fromValue(m_graph->findShortestPathWithinRegions(
             startTerminal, endTerminal, allowedRegions, mode));
     } else {
-        return QVariant::fromValue(m_graph->findShortestPath(startTerminal, endTerminal, mode));
+        return QVariant::fromValue(
+            m_graph->findShortestPath(startTerminal, endTerminal, mode));
     }
 }
 
 QVariant CommandProcessor::handleFindTopPaths(const QVariantMap& params)
 {
-    if (!params.contains("start_terminal") || !params.contains("end_terminal")) {
-        throw std::invalid_argument("Missing start_terminal or end_terminal parameter");
+    if (!params.contains("start_terminal") ||
+        !params.contains("end_terminal")) {
+        throw std::invalid_argument("Missing start_terminal or "
+                                    "end_terminal parameter");
     }
     
     QString startTerminal = params["start_terminal"].toString();
@@ -600,10 +707,12 @@ QVariant CommandProcessor::handleFindTopPaths(const QVariantMap& params)
     }
     
     // Extract skip option (optional)
-    bool skipSameModeTerminalDelaysAndCosts = params.value("skip_same_mode_terminal_delays_and_costs", true).toBool();
+    bool skipSameModeTerminalDelaysAndCosts =
+        params.value("skip_same_mode_terminal_delays_and_costs", true).toBool();
     
     return QVariant::fromValue(m_graph->findTopNShortestPaths(
-        startTerminal, endTerminal, n, mode, skipSameModeTerminalDelaysAndCosts));
+        startTerminal, endTerminal, n, mode,
+        skipSameModeTerminalDelaysAndCosts));
 }
 
 QVariant CommandProcessor::handleAddContainer(const QVariantMap& params)
@@ -612,7 +721,8 @@ QVariant CommandProcessor::handleAddContainer(const QVariantMap& params)
     double addingTime = params.value("adding_time", -1).toDouble();
     
     if (terminalId.isEmpty() || !params.contains("container")) {
-        throw std::invalid_argument("Terminal ID and container must be provided");
+        throw std::invalid_argument("Terminal ID and container "
+                                    "must be provided");
     }
     
     Terminal* terminal = getTerminalFromParams(params);
@@ -623,7 +733,8 @@ QVariant CommandProcessor::handleAddContainer(const QVariantMap& params)
     
     if (containerVar.canConvert<QString>()) {
         // Parse JSON string
-        QJsonDocument doc = QJsonDocument::fromJson(containerVar.toString().toUtf8());
+        QJsonDocument doc =
+            QJsonDocument::fromJson(containerVar.toString().toUtf8());
         if (!doc.isObject()) {
             throw std::invalid_argument("Invalid JSON format for container");
         }
@@ -632,7 +743,8 @@ QVariant CommandProcessor::handleAddContainer(const QVariantMap& params)
         // Convert variant map to JSON object
         containerJson = QJsonObject::fromVariantMap(containerVar.toMap());
     } else {
-        throw std::invalid_argument("Container must be a JSON string or object");
+        throw std::invalid_argument("Container must be a JSON "
+                                    "string or object");
     }
     
     // Create container object
@@ -670,7 +782,7 @@ QVariantMap CommandProcessor::deserializeParams(const QVariantMap& params)
 
         // Handle different types of parameters
         if (key == "container" || key == "containers_json" ||
-            value.typeId() == QMetaType::QString) {  // Use typeId() and QMetaType instead
+            value.typeId() == QMetaType::QString) {
             // For container JSON or string values, leave as is
             result[key] = value;
         } else if (value.canConvert<QVariantList>()) {

@@ -17,7 +17,8 @@
 namespace TerminalSim {
 
 /**
- * @brief Server class that manages a TerminalGraph and processes client requests
+ * @brief Server class that manages a TerminalGraph
+ *        and processes client requests
  */
 class TerminalGraphServer : public QObject {
     Q_OBJECT
@@ -28,7 +29,8 @@ public:
      * @param pathToTerminalsDirectory Directory for terminal storage
      * @return Singleton instance
      */
-    static TerminalGraphServer* getInstance(const QString& pathToTerminalsDirectory = QString());
+    static TerminalGraphServer*
+    getInstance(const QString& pathToTerminalsDirectory = QString());
     
     /**
      * @brief Initialize the server
@@ -89,7 +91,8 @@ public:
      * @param params Command parameters
      * @return Command result
      */
-    QVariant processCommand(const QString& command, const QVariantMap& params);
+    QVariant
+    processCommand(const QString& command, const QVariantMap& params);
     
 signals:
     /**
@@ -119,7 +122,8 @@ private slots:
     
 private:
     // Constructor is private for singleton
-    explicit TerminalGraphServer(const QString& pathToTerminalsDirectory = QString());
+    explicit TerminalGraphServer(
+        const QString& pathToTerminalsDirectory = QString());
     ~TerminalGraphServer();
     
     // Prevent copy

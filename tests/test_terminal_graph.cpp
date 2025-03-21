@@ -256,7 +256,7 @@ private slots:
         graph.addRoute("CD", "C", "D", TransportationMode::Truck, routeCD);
 
         // Find shortest path
-        QList<TerminalGraph::PathSegment> path = graph.findShortestPath("A", "C", TransportationMode::Truck);
+        QList<PathSegment> path = graph.findShortestPath("A", "C", TransportationMode::Truck);
 
         // Should go A -> B -> C as it's cheaper than A -> C direct
         QCOMPARE(path.size(), 2);
@@ -266,14 +266,18 @@ private slots:
         QCOMPARE(path[1].to, QString("C"));
 
         // Find path within specific regions
-        QList<TerminalGraph::PathSegment> regionPath = graph.findShortestPathWithinRegions(
+        QList<PathSegment> regionPath = graph.findShortestPathWithinRegions(
             "A", "C", QStringList{"Region1"}, TransportationMode::Truck);
 
         // Should be the same path as before since all nodes are in Region1
         QCOMPARE(regionPath.size(), 2);
 
+        qDebug() << "HERE2";
+
         // Find top N paths
-        QList<TerminalGraph::Path> topPaths = graph.findTopNShortestPaths("A", "C", 2, TransportationMode::Truck);
+        QList<Path> topPaths = graph.findTopNShortestPaths("A", "C", 2, TransportationMode::Truck);
+
+        qDebug() << "HERE3";
 
         // Should have 2 paths: A->B->C and A->C
         QCOMPARE(topPaths.size(), 2);

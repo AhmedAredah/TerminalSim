@@ -35,12 +35,15 @@ TransportationMode EnumUtils::stringToTransportationMode(const QString& str) {
     
     // Try to convert from number if string contains a number
     value = str.toInt(&ok);
-    if (ok && value >= 0 && value <= static_cast<int>(TransportationMode::Ship)) {
+    if (ok && value >= 0 &&
+        value <= static_cast<int>(TransportationMode::Ship)) {
         return static_cast<TransportationMode>(value);
     }
     
     // Return default value if conversion fails
-    qWarning() << "Invalid TransportationMode string:" << str << "- defaulting to Truck";
+    qWarning() << "Invalid TransportationMode string:"
+               << str
+               << "- defaulting to Truck";
     return TransportationMode::Truck;
 }
 
@@ -62,17 +65,22 @@ TerminalInterface EnumUtils::stringToTerminalInterface(const QString& str) {
     
     // Try to convert from number if string contains a number
     value = str.toInt(&ok);
-    if (ok && value >= 0 && value <= static_cast<int>(TerminalInterface::RAIL_SIDE)) {
+    if (ok && value >= 0 &&
+        value <= static_cast<int>(TerminalInterface::RAIL_SIDE)) {
         return static_cast<TerminalInterface>(value);
     }
     
     // Return default value if conversion fails
-    qWarning() << "Invalid TerminalInterface string:" << str << "- defaulting to LAND_SIDE";
+    qWarning() << "Invalid TerminalInterface string:"
+               << str
+               << "- defaulting to LAND_SIDE";
     return TerminalInterface::LAND_SIDE;
 }
 
-// Helper function to check if a transportation mode can use a terminal interface
-bool canModeUseInterface(TransportationMode mode, TerminalInterface interface) {
+// Helper function to check if a transportation
+// mode can use a terminal interface
+bool canModeUseInterface(TransportationMode mode,
+                         TerminalInterface interface) {
     switch (mode) {
         case TransportationMode::Truck:
             return interface == TerminalInterface::LAND_SIDE;

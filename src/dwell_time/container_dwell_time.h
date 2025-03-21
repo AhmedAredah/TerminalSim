@@ -46,7 +46,8 @@ public:
     /**
      * @brief Calculates departure time based on arrival time and dwell time
      * @param arrivalTime Time of arrival in seconds
-     * @param method Distribution method ("gamma", "exponential", "normal", "lognormal")
+     * @param method Distribution method
+     *        ("gamma", "exponential", "normal", "lognormal")
      * @param params Additional parameters for the distribution
      * @return Departure time in seconds
      */

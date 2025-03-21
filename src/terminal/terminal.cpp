@@ -26,7 +26,7 @@ Terminal::Terminal(
     const QVariantMap& customs,
     const QVariantMap& cost,
     const QString& pathToTerminalFolder
-) : QObject(nullptr),
+    ) : QObject(nullptr),
     m_terminalName(terminalName),
     m_interfaces(interfaces),
     m_modeNetworkAliases(modeNetworkAliases),
@@ -43,7 +43,9 @@ Terminal::Terminal(
 {
     // Process capacity parameters
     if (!capacity.isEmpty()) {
-        QVariant maxCapacityVariant = capacity.value("max_capacity", QVariant(std::numeric_limits<int>::max()));
+        QVariant maxCapacityVariant =
+            capacity.value("max_capacity",
+                           QVariant(std::numeric_limits<int>::max()));
         if (!maxCapacityVariant.isNull()) {
             m_maxCapacity = maxCapacityVariant.toInt();
         }
@@ -65,7 +67,8 @@ Terminal::Terminal(
         
         // Ensure numerical parameters are stored as doubles
         QVariantMap cleanParams;
-        for (auto it = m_dwellTimeParameters.constBegin(); it != m_dwellTimeParameters.constEnd(); ++it) {
+        for (auto it = m_dwellTimeParameters.constBegin();
+             it != m_dwellTimeParameters.constEnd(); ++it) {
             if (it.value().isValid() && !it.value().isNull()) {
                 cleanParams[it.key()] = it.value().toDouble();
             }
@@ -75,9 +78,12 @@ Terminal::Terminal(
     
     // Process customs parameters
     if (!customs.isEmpty()) {
-        m_customsProbability = customs.value("probability", 0.0).toDouble();
-        m_customsDelayMean = customs.value("delay_mean", 0.0).toDouble();
-        m_customsDelayVariance = customs.value("delay_variance", 0.0).toDouble();
+        m_customsProbability =
+            customs.value("probability", 0.0).toDouble();
+        m_customsDelayMean =
+            customs.value("delay_mean", 0.0).toDouble();
+        m_customsDelayVariance =
+            customs.value("delay_variance", 0.0).toDouble();
     }
     
     // Process cost parameters
@@ -101,8 +107,11 @@ Terminal::Terminal(
         m_storage = new ContainerCore::ContainerMap(m_sqlFile);
     }
     
-    qDebug() << "Terminal" << m_terminalName << "initialized with" << m_interfaces.size()
-            << "interfaces and max capacity:" << (m_maxCapacity == std::numeric_limits<int>::max() ? "unlimited" : QString::number(m_maxCapacity));
+    qDebug() << "Terminal" << m_terminalName
+             << "initialized with" << m_interfaces.size()
+             << "interfaces and max capacity:"
+             << (m_maxCapacity == std::numeric_limits<int>::max() ?
+                     "unlimited" : QString::number(m_maxCapacity));
 }
 
 Terminal::~Terminal()
@@ -111,21 +120,27 @@ Terminal::~Terminal()
     delete m_storage;
 }
 
-QString Terminal::getAliasByModeNetwork(TransportationMode mode, const QString& network) const
+QString Terminal::getAliasByModeNetwork(TransportationMode mode,
+                                        const QString& network) const
 {
     QMutexLocker locker(&m_mutex);
     return m_modeNetworkAliases.value(qMakePair(mode, network));
 }
 
-void Terminal::addAliasForModeNetwork(TransportationMode mode, const QString& network, const QString& alias)
+void Terminal::addAliasForModeNetwork(TransportationMode mode,
+                                      const QString& network,
+                                      const QString& alias)
 {
     QMutexLocker locker(&m_mutex);
     m_modeNetworkAliases[qMakePair(mode, network)] = alias;
-    qDebug() << "Added alias" << alias << "for terminal" << m_terminalName 
-             << "with mode" << static_cast<int>(mode) << "and network" << network;
+    qDebug() << "Added alias" << alias
+             << "for terminal" << m_terminalName
+             << "with mode" << static_cast<int>(mode)
+             << "and network" << network;
 }
 
-QPair<bool, QString> Terminal::checkCapacityStatus(int additionalContainers) const
+QPair<bool, QString>
+Terminal::checkCapacityStatus(int additionalContainers) const
 {
     QMutexLocker locker(&m_mutex);
     
@@ -139,7 +154,9 @@ QPair<bool, QString> Terminal::checkCapacityStatus(int additionalContainers) con
     
     // Check if exceeds max capacity
     if (newCount > m_maxCapacity) {
-        return qMakePair(false, QString("Exceeds max capacity of %1").arg(m_maxCapacity));
+        return qMakePair(false,
+                         QString("Exceeds max capacity of %1")
+                             .arg(m_maxCapacity));
     }
     
     // If no critical threshold is set
@@ -150,15 +167,19 @@ QPair<bool, QString> Terminal::checkCapacityStatus(int additionalContainers) con
     // Check against critical threshold
     double criticalLimit = m_maxCapacity * m_criticalThreshold;
     if (newCount > criticalLimit) {
-        return qMakePair(false, QString("Exceeds critical threshold (%1% of %2)")
-            .arg(m_criticalThreshold * 100).arg(m_maxCapacity));
+        return qMakePair(false,
+                         QString("Exceeds critical threshold (%1% of %2)")
+                             .arg(m_criticalThreshold * 100)
+                             .arg(m_maxCapacity));
     }
     
     // Check against warning threshold (90% of critical threshold)
     double warningLimit = criticalLimit * 0.9;
     if (newCount > warningLimit) {
-        return qMakePair(true, QString("Warning: Approaching critical capacity (%1/%2)")
-            .arg(newCount).arg(qRound(criticalLimit)));
+        return qMakePair(true,
+                         QString("Warning: Approaching critical "
+                                 "capacity (%1/%2)")
+                             .arg(newCount).arg(qRound(criticalLimit)));
     }
     
     return qMakePair(true, QString("OK"));
@@ -173,8 +194,10 @@ double Terminal::estimateContainerHandlingTime() const
     // 1. Dwell Time (Storage Duration)
     if (!m_dwellTimeParameters.isEmpty()) {
         double dwellMeanHours = ContainerDwellTime::getDepartureTime(
-            0.0, m_dwellTimeMethod.isEmpty() ? "gamma" : m_dwellTimeMethod,
-            m_dwellTimeParameters) / 3600.0; // Convert seconds to hours
+                                    0.0, m_dwellTimeMethod.isEmpty() ?
+                                        "gamma" : m_dwellTimeMethod,
+                                    m_dwellTimeParameters) /
+                                3600.0; // Convert seconds to hours
         totalHours += dwellMeanHours;
     }
     
@@ -186,7 +209,9 @@ double Terminal::estimateContainerHandlingTime() const
     return totalHours;
 }
 
-double Terminal::estimateContainerCost(const ContainerCore::Container *container, bool applyCustoms) const
+double
+Terminal::estimateContainerCost(const ContainerCore::Container *container,
+                                bool applyCustoms) const
 {
     QMutexLocker locker(&m_mutex);
     
@@ -205,7 +230,8 @@ double Terminal::estimateContainerCost(const ContainerCore::Container *container
     // Apply risk factor based on container value if applicable
     if (container != nullptr && m_riskFactor > 0.0) {
         QVariant dollarValue = container->getCustomVariable(
-            ContainerCore::Container::Container::HaulerType::noHauler, "dollar_value");
+            ContainerCore::Container::Container::HaulerType::noHauler,
+            "dollar_value");
         
         if (dollarValue.isValid() && !dollarValue.toString().isEmpty()) {
             bool ok;
@@ -219,7 +245,8 @@ double Terminal::estimateContainerCost(const ContainerCore::Container *container
     return totalCost;
 }
 
-bool Terminal::canAcceptTransport(TransportationMode mode, TerminalInterface side) const
+bool Terminal::canAcceptTransport(TransportationMode mode,
+                                  TerminalInterface side) const
 {
     QMutexLocker locker(&m_mutex);
     
@@ -231,19 +258,24 @@ bool Terminal::canAcceptTransport(TransportationMode mode, TerminalInterface sid
     return it.value().contains(mode);
 }
 
-void Terminal::addContainer(const ContainerCore::Container& container, double addingTime)
+void Terminal::addContainer(const ContainerCore::Container& container,
+                            double addingTime)
 {
     QMutexLocker locker(&m_mutex);
     
     // Check capacity
     QPair<bool, QString> capacityStatus = checkCapacityStatus(1);
     if (!capacityStatus.first) {
-        qWarning() << "Cannot add container to terminal" << m_terminalName << ":" << capacityStatus.second;
-        throw std::runtime_error(QString("Cannot add container: %1").arg(capacityStatus.second).toStdString());
+        qWarning() << "Cannot add container to terminal"
+                   << m_terminalName
+                   << ":" << capacityStatus.second;
+        throw std::runtime_error(QString("Cannot add container: %1")
+                                     .arg(capacityStatus.second).toStdString());
     }
     
     if (capacityStatus.second.startsWith("Warning")) {
-        qWarning() << "Terminal" << m_terminalName << ":" << capacityStatus.second;
+        qWarning() << "Terminal" << m_terminalName
+                   << ":" << capacityStatus.second;
     }
     
     // Create a copy of the container to modify
@@ -261,37 +293,49 @@ void Terminal::addContainer(const ContainerCore::Container& container, double ad
                 baseAddingTime,
                 m_dwellTimeMethod,
                 m_dwellTimeParameters
-            );
+                );
         }
         
         // 2. Apply customs delay if applicable based on probability
         if (m_customsProbability > 0.0 && m_customsDelayMean > 0.0) {
-            if (QRandomGenerator::global()->generateDouble() < m_customsProbability) {
-                double stdDev = (m_customsDelayVariance > 0.0) ? std::sqrt(m_customsDelayVariance) : 1.0;
+            if (QRandomGenerator::global()->generateDouble() <
+                m_customsProbability) {
+                double stdDev = (m_customsDelayVariance > 0.0) ?
+                                    std::sqrt(m_customsDelayVariance) : 1.0;
                 double customsDelay = 0.0;
                 {
-                    // Create a normal distribution with the given mean and standard deviation
-                    std::normal_distribution<double> normalDist(m_customsDelayMean, stdDev);
+                    // Create a normal distribution with the given
+                    // mean and standard deviation
+                    std::normal_distribution<double>
+                        normalDist(m_customsDelayMean, stdDev);
 
                     // Use Qt's random generator to get a seed value
-                    std::mt19937 generator(QRandomGenerator::global()->generate());
+                    std::mt19937
+                        generator(QRandomGenerator::global()->generate());
 
                     // Generate a random value from the normal distribution
                     customsDelay = qMax(0.0, normalDist(generator));
                 }
-                    
-                baseDeparture += customsDelay * 3600.0; // Convert hours to seconds
+
+                baseDeparture +=
+                    customsDelay * 3600.0; // Convert hours to seconds
                 customsApplied = true;
                 
-                qDebug() << "Container" << containerCopy->getContainerID() << "selected for customs inspection. Delay:"
+                qDebug() << "Container"
+                         << containerCopy->getContainerID()
+                         << "selected for customs inspection. Delay:"
                          << customsDelay << "hours";
             }
         }
     }
     
     // 3. Calculate total cost for the container
-    double containerCost = estimateContainerCost(containerCopy, customsApplied);
-    QVariant costSoFar = containerCopy->getCustomVariable(ContainerCore::Container::HaulerType::noHauler, "cost");
+    double containerCost =
+        estimateContainerCost(containerCopy, customsApplied);
+    QVariant costSoFar =
+        containerCopy->getCustomVariable(
+            ContainerCore::Container::HaulerType::noHauler,
+            "cost");
     
     double totalCost = containerCost;
     if (costSoFar.isValid() && !costSoFar.toString().isEmpty()) {
@@ -302,10 +346,16 @@ void Terminal::addContainer(const ContainerCore::Container& container, double ad
         }
     }
     
-    containerCopy->addCustomVariable(ContainerCore::Container::HaulerType::noHauler, "cost", totalCost);
+    containerCopy->addCustomVariable(
+        ContainerCore::Container::HaulerType::noHauler,
+        "cost",
+        totalCost);
     
     // 4. Accumulate total time for the container
-    QVariant timeSoFar = containerCopy->getCustomVariable(ContainerCore::Container::HaulerType::noHauler, "time");
+    QVariant timeSoFar =
+        containerCopy->getCustomVariable(
+            ContainerCore::Container::HaulerType::noHauler,
+            "time");
     
     double totalTime = baseDeparture - baseAddingTime;
     if (timeSoFar.isValid() && !timeSoFar.toString().isEmpty()) {
@@ -316,7 +366,10 @@ void Terminal::addContainer(const ContainerCore::Container& container, double ad
         }
     }
     
-    containerCopy->addCustomVariable(ContainerCore::Container::HaulerType::noHauler, "time", totalTime);
+    containerCopy->addCustomVariable(
+        ContainerCore::Container::HaulerType::noHauler,
+        "time",
+        totalTime);
     
     // 5. Set container location
     containerCopy->setContainerCurrentLocation(m_terminalName);
@@ -325,12 +378,15 @@ void Terminal::addContainer(const ContainerCore::Container& container, double ad
     m_storage->addContainer(containerCopy->getContainerID(),
                             containerCopy, baseAddingTime, baseDeparture);
     
-    qDebug() << "Container" << containerCopy->getContainerID() << "added to terminal" << m_terminalName
+    qDebug() << "Container" << containerCopy->getContainerID()
+             << "added to terminal" << m_terminalName
              << "with arrival time:" << baseAddingTime
              << "and estimated departure:" << baseDeparture;
 }
 
-void Terminal::addContainers(const QVector<ContainerCore::Container>& containers, double addingTime)
+void
+Terminal::addContainers(const QVector<ContainerCore::Container>& containers,
+                        double addingTime)
 {
     QMutexLocker locker(&m_mutex);
     
@@ -339,19 +395,23 @@ void Terminal::addContainers(const QVector<ContainerCore::Container>& containers
     
     QPair<bool, QString> capacityStatus = checkCapacityStatus(containerCount);
     if (!capacityStatus.first) {
-        qWarning() << "Cannot add" << containerCount << "containers to terminal" << m_terminalName
+        qWarning() << "Cannot add" << containerCount
+                   << "containers to terminal" << m_terminalName
                    << ":" << capacityStatus.second;
         throw std::runtime_error(
-            QString("Cannot add %1 containers: %2").arg(containerCount).arg(capacityStatus.second).toStdString()
-        );
+            QString("Cannot add %1 containers: %2")
+                .arg(containerCount).arg(capacityStatus.second).toStdString()
+            );
     }
     
     if (capacityStatus.second.startsWith("Warning")) {
-        qWarning() << "Terminal" << m_terminalName << ":" << capacityStatus.second;
+        qWarning() << "Terminal" << m_terminalName
+                   << ":" << capacityStatus.second;
     }
     
     // Add each container individually
-    // Must release mutex to prevent deadlock during nested lock acquisition in addContainer
+    // Must release mutex to prevent deadlock during
+    // nested lock acquisition in addContainer
     locker.unlock();
     
     for (const ContainerCore::Container& container : containers) {
@@ -359,14 +419,16 @@ void Terminal::addContainers(const QVector<ContainerCore::Container>& containers
     }
 }
 
-void Terminal::addContainersFromJson(const QJsonObject& containers, double addingTime)
+void Terminal::addContainersFromJson(const QJsonObject& containers,
+                                     double addingTime)
 {
     // Parse the containers from JSON
     QVector<ContainerCore::Container> containerList;
     
     try {
         // Check if it's a container array
-        if (containers.contains("containers") && containers["containers"].isArray()) {
+        if (containers.contains("containers") &&
+            containers["containers"].isArray()) {
             QJsonArray containerArray = containers["containers"].toArray();
             for (const QJsonValue& value : containerArray) {
                 if (value.isObject()) {
@@ -382,7 +444,8 @@ void Terminal::addContainersFromJson(const QJsonObject& containers, double addin
         }
         // Otherwise, treat the whole object as a map of containers
         else {
-            for (auto it = containers.constBegin(); it != containers.constEnd(); ++it) {
+            for (auto it = containers.constBegin();
+                 it != containers.constEnd(); ++it) {
                 if (it.value().isObject()) {
                     ContainerCore::Container container(it.value().toObject());
                     containerList.append(container);
@@ -390,8 +453,10 @@ void Terminal::addContainersFromJson(const QJsonObject& containers, double addin
             }
         }
     } catch (const std::exception& e) {
-        qWarning() << "Error parsing containers from JSON:" << e.what();
-        throw std::runtime_error(QString("Invalid container JSON: %1").arg(e.what()).toStdString());
+        qWarning() << "Error parsing containers from JSON:"
+                   << e.what();
+        throw std::runtime_error(QString("Invalid container JSON: %1")
+                                     .arg(e.what()).toStdString());
     }
     
     int containerCount = containerList.size();
@@ -400,27 +465,33 @@ void Terminal::addContainersFromJson(const QJsonObject& containers, double addin
         return;
     }
     
-    qDebug() << "Adding" << containerCount << "containers from JSON to terminal" << m_terminalName;
+    qDebug() << "Adding" << containerCount
+             << "containers from JSON to terminal" << m_terminalName;
     
     // Add the containers
     addContainers(containerList, addingTime);
 }
 
-QJsonArray Terminal::getContainersByDepatingTime(double departingTime, const QString& condition) const
+QJsonArray
+Terminal::getContainersByDepatingTime(double departingTime,
+                                      const QString& condition) const
 {
     QMutexLocker locker(&m_mutex);
     
     // Validate condition
     QStringList validConditions = {"<", "<=", ">", ">=", "==", "!="};
     if (!validConditions.contains(condition)) {
-        qWarning() << "Invalid condition for getContainersByDepatingTime:" << condition;
+        qWarning() << "Invalid condition for getContainersByDepatingTime:"
+                   << condition;
         throw std::invalid_argument(
-            QString("Invalid condition: %1. Must be one of: <, <=, >, >=, ==, !=").arg(condition).toStdString()
-        );
+            QString("Invalid condition: %1. Must be one of: "
+                    "<, <=, >, >=, ==, !=").arg(condition).toStdString()
+            );
     }
     
     // Get containers from storage based on departure time
-    QVector<ContainerCore::Container *> containers = m_storage->getContainersByLeavingTime(condition, departingTime);
+    QVector<ContainerCore::Container *> containers =
+        m_storage->getContainersByLeavingTime(condition, departingTime);
     
     // Convert to JSON array
     QJsonArray result;
@@ -428,27 +499,34 @@ QJsonArray Terminal::getContainersByDepatingTime(double departingTime, const QSt
         result.append(container->toJson());
     }
     
-    qDebug() << "Found" << result.size() << "containers with departure time" << condition << departingTime 
+    qDebug() << "Found" << result.size()
+             << "containers with departure time" <<
+        condition << departingTime
              << "in terminal" << m_terminalName;
     
     return result;
 }
 
-QJsonArray Terminal::getContainersByAddedTime(double addedTime, const QString& condition) const
+QJsonArray
+Terminal::getContainersByAddedTime(double addedTime,
+                                   const QString& condition) const
 {
     QMutexLocker locker(&m_mutex);
     
     // Validate condition
     QStringList validConditions = {"<", "<=", ">", ">=", "==", "!="};
     if (!validConditions.contains(condition)) {
-        qWarning() << "Invalid condition for getContainersByAddedTime:" << condition;
+        qWarning() << "Invalid condition for getContainersByAddedTime:"
+                   << condition;
         throw std::invalid_argument(
-            QString("Invalid condition: %1. Must be one of: <, <=, >, >=, ==, !=").arg(condition).toStdString()
-        );
+            QString("Invalid condition: %1. Must be one of: "
+                    "<, <=, >, >=, ==, !=").arg(condition).toStdString()
+            );
     }
     
     // Get containers from storage based on added time
-    QVector<ContainerCore::Container *> containers = m_storage->getContainersByAddedTime(condition, addedTime);
+    QVector<ContainerCore::Container *> containers =
+        m_storage->getContainersByAddedTime(condition, addedTime);
     
     // Convert to JSON array
     QJsonArray result;
@@ -456,18 +534,21 @@ QJsonArray Terminal::getContainersByAddedTime(double addedTime, const QString& c
         result.append(container->toJson());
     }
     
-    qDebug() << "Found" << result.size() << "containers with added time" << condition << addedTime 
+    qDebug() << "Found" << result.size()
+             << "containers with added time" << condition << addedTime
              << "in terminal" << m_terminalName;
     
     return result;
 }
 
-QJsonArray Terminal::getContainersByNextDestination(const QString& destination) const
+QJsonArray
+Terminal::getContainersByNextDestination(const QString& destination) const
 {
     QMutexLocker locker(&m_mutex);
     
     // Get containers from storage based on next destination
-    QVector<ContainerCore::Container *> containers = m_storage->getContainersByNextDestination(destination);
+    QVector<ContainerCore::Container *> containers =
+        m_storage->getContainersByNextDestination(destination);
     
     // Convert to JSON array
     QJsonArray result;
@@ -475,18 +556,21 @@ QJsonArray Terminal::getContainersByNextDestination(const QString& destination) 
         result.append(container->toJson());
     }
     
-    qDebug() << "Found" << result.size() << "containers with next destination" << destination 
+    qDebug() << "Found" << result.size()
+             << "containers with next destination" << destination
              << "in terminal" << m_terminalName;
     
     return result;
 }
 
-QJsonArray Terminal::dequeueContainersByNextDestination(const QString& destination)
+QJsonArray
+Terminal::dequeueContainersByNextDestination(const QString& destination)
 {
     QMutexLocker locker(&m_mutex);
     
     // Get and remove containers from storage based on next destination
-    QVector<ContainerCore::Container *> containers = m_storage->dequeueContainersByNextDestination(destination);
+    QVector<ContainerCore::Container *> containers =
+        m_storage->dequeueContainersByNextDestination(destination);
     
     // Convert to JSON array
     QJsonArray result;
@@ -494,7 +578,8 @@ QJsonArray Terminal::dequeueContainersByNextDestination(const QString& destinati
         result.append(container->toJson());
     }
     
-    qDebug() << "Removed" << result.size() << "containers with next destination" << destination 
+    qDebug() << "Removed" << result.size()
+             << "containers with next destination" << destination
              << "from terminal" << m_terminalName;
     
     return result;
@@ -514,7 +599,8 @@ int Terminal::getAvailableCapacity() const
     locker.unlock();
 
     // Get the container count
-    int currentCount = getContainerCount(); // This method will handle its own locking
+    int currentCount =
+        getContainerCount(); // This method will handle its own locking
 
     if (maxCap == std::numeric_limits<int>::max()) {
         return std::numeric_limits<int>::max();
@@ -548,31 +634,37 @@ QJsonObject Terminal::toJson() const
 
     // Interfaces
     QJsonObject interfacesJson;
-    for (auto it = m_interfaces.constBegin(); it != m_interfaces.constEnd(); ++it) {
+    for (auto it = m_interfaces.constBegin();
+         it != m_interfaces.constEnd(); ++it) {
         QJsonArray modesArray;
         for (TransportationMode mode : it.value()) {
             modesArray.append(static_cast<int>(mode));
         }
-        interfacesJson[QString::number(static_cast<int>(it.key()))] = modesArray;
+        interfacesJson[QString::number(static_cast<int>(it.key()))] =
+            modesArray;
     }
     json["interfaces"] = interfacesJson;
 
     // Mode network aliases
     QJsonObject aliasesJson;
-    for (auto it = m_modeNetworkAliases.constBegin(); it != m_modeNetworkAliases.constEnd(); ++it) {
-        QString key = QString("%1:%2").arg(static_cast<int>(it.key().first)).arg(it.key().second);
+    for (auto it = m_modeNetworkAliases.constBegin();
+         it != m_modeNetworkAliases.constEnd(); ++it) {
+        QString key = QString("%1:%2")
+        .arg(static_cast<int>(it.key().first)).arg(it.key().second);
         aliasesJson[key] = it.value();
     }
     json["mode_network_aliases"] = aliasesJson;
 
     // Capacity
     QJsonObject capacityJson;
-    capacityJson["max_capacity"] = (m_maxCapacity == std::numeric_limits<int>::max())
-                                       ? QJsonValue(QJsonValue::Null)
-                                       : QJsonValue(m_maxCapacity);
-    capacityJson["critical_threshold"] = (m_criticalThreshold < 0)
-                                             ? QJsonValue(QJsonValue::Null)
-                                             : QJsonValue(m_criticalThreshold);
+    capacityJson["max_capacity"] =
+        (m_maxCapacity == std::numeric_limits<int>::max())
+            ? QJsonValue(QJsonValue::Null)
+            : QJsonValue(m_maxCapacity);
+    capacityJson["critical_threshold"] =
+        (m_criticalThreshold < 0)
+            ? QJsonValue(QJsonValue::Null)
+            : QJsonValue(m_criticalThreshold);
     json["capacity"] = capacityJson;
 
     // Dwell time
@@ -580,7 +672,8 @@ QJsonObject Terminal::toJson() const
     dwellTimeJson["method"] = m_dwellTimeMethod;
 
     QJsonObject parametersJson;
-    for (auto it = m_dwellTimeParameters.constBegin(); it != m_dwellTimeParameters.constEnd(); ++it) {
+    for (auto it = m_dwellTimeParameters.constBegin();
+         it != m_dwellTimeParameters.constEnd(); ++it) {
         parametersJson[it.key()] = it.value().toDouble();
     }
     dwellTimeJson["parameters"] = parametersJson;
@@ -600,13 +693,16 @@ QJsonObject Terminal::toJson() const
     costJson["risk_factor"] = m_riskFactor;
     json["cost"] = costJson;
 
-    // Storage information - Direct access instead of calling methods that lock the mutex
-    json["container_count"] = m_storage->size(); // Direct access instead of getContainerCount()
+    // Storage information - Direct access instead of
+    // calling methods that lock the mutex
+    json["container_count"] =
+        m_storage->size(); // Direct access instead of getContainerCount()
 
     // Calculate available capacity directly
-    int availableCapacity = (m_maxCapacity == std::numeric_limits<int>::max()) ?
-                                std::numeric_limits<int>::max() :
-                                (m_maxCapacity - m_storage->size());
+    int availableCapacity =
+        (m_maxCapacity == std::numeric_limits<int>::max()) ?
+            std::numeric_limits<int>::max() :
+            (m_maxCapacity - m_storage->size());
     json["available_capacity"] = availableCapacity;
 
     // SQL file path if available
@@ -615,32 +711,39 @@ QJsonObject Terminal::toJson() const
         if (fileInfo.exists()) {
             json["sql_file"] = m_sqlFile;
             json["sql_file_size"] = fileInfo.size();
-            json["sql_file_modified"] = fileInfo.lastModified().toString(Qt::ISODate);
+            json["sql_file_modified"] =
+                fileInfo.lastModified().toString(Qt::ISODate);
         }
     }
 
     return json;
 }
 
-Terminal* Terminal::fromJson(const QJsonObject& json, const QString& pathToTerminalFolder)
+Terminal* Terminal::fromJson(const QJsonObject& json,
+                             const QString& pathToTerminalFolder)
 {
     // Extract terminal name
-    if (!json.contains("terminal_name") || !json["terminal_name"].isString()) {
+    if (!json.contains("terminal_name") ||
+        !json["terminal_name"].isString()) {
         qWarning() << "Missing or invalid terminal_name in JSON";
         return nullptr;
     }
     QString terminalName = json["terminal_name"].toString();
     
     // Extract interfaces
-    QMap<TerminalInterface, QSet<TransportationMode>> interfaces;
-    if (json.contains("interfaces") && json["interfaces"].isObject()) {
+    QMap<TerminalInterface,
+         QSet<TransportationMode>> interfaces;
+    if (json.contains("interfaces") &&
+        json["interfaces"].isObject()) {
         QJsonObject interfacesJson = json["interfaces"].toObject();
-        for (auto it = interfacesJson.constBegin(); it != interfacesJson.constEnd(); ++it) {
+        for (auto it = interfacesJson.constBegin();
+             it != interfacesJson.constEnd(); ++it) {
             bool ok;
             int interfaceInt = it.key().toInt(&ok);
             if (!ok) continue;
             
-            TerminalInterface interface = static_cast<TerminalInterface>(interfaceInt);
+            TerminalInterface interface =
+                static_cast<TerminalInterface>(interfaceInt);
             QSet<TransportationMode> modes;
             
             if (it.value().isArray()) {
@@ -659,9 +762,11 @@ Terminal* Terminal::fromJson(const QJsonObject& json, const QString& pathToTermi
     
     // Extract mode network aliases
     QMap<QPair<TransportationMode, QString>, QString> modeNetworkAliases;
-    if (json.contains("mode_network_aliases") && json["mode_network_aliases"].isObject()) {
+    if (json.contains("mode_network_aliases") &&
+        json["mode_network_aliases"].isObject()) {
         QJsonObject aliasesJson = json["mode_network_aliases"].toObject();
-        for (auto it = aliasesJson.constBegin(); it != aliasesJson.constEnd(); ++it) {
+        for (auto it = aliasesJson.constBegin();
+             it != aliasesJson.constEnd(); ++it) {
             QString key = it.key();
             QStringList parts = key.split(':');
             if (parts.size() != 2) continue;
@@ -688,7 +793,8 @@ Terminal* Terminal::fromJson(const QJsonObject& json, const QString& pathToTermi
         }
         
         if (!capacityJson["critical_threshold"].isNull()) {
-            capacity["critical_threshold"] = capacityJson["critical_threshold"].toDouble();
+            capacity["critical_threshold"] =
+                capacityJson["critical_threshold"].toDouble();
         }
     }
     
@@ -697,15 +803,19 @@ Terminal* Terminal::fromJson(const QJsonObject& json, const QString& pathToTermi
     if (json.contains("dwell_time") && json["dwell_time"].isObject()) {
         QJsonObject dwellTimeJson = json["dwell_time"].toObject();
         
-        if (dwellTimeJson.contains("method") && dwellTimeJson["method"].isString()) {
+        if (dwellTimeJson.contains("method") &&
+            dwellTimeJson["method"].isString()) {
             dwellTime["method"] = dwellTimeJson["method"].toString();
         }
         
-        if (dwellTimeJson.contains("parameters") && dwellTimeJson["parameters"].isObject()) {
-            QJsonObject parametersJson = dwellTimeJson["parameters"].toObject();
+        if (dwellTimeJson.contains("parameters") &&
+            dwellTimeJson["parameters"].isObject()) {
+            QJsonObject parametersJson =
+                dwellTimeJson["parameters"].toObject();
             QVariantMap parameters;
             
-            for (auto it = parametersJson.constBegin(); it != parametersJson.constEnd(); ++it) {
+            for (auto it = parametersJson.constBegin();
+                 it != parametersJson.constEnd(); ++it) {
                 parameters[it.key()] = it.value().toDouble();
             }
             
@@ -719,15 +829,18 @@ Terminal* Terminal::fromJson(const QJsonObject& json, const QString& pathToTermi
         QJsonObject customsJson = json["customs"].toObject();
         
         if (customsJson.contains("probability")) {
-            customs["probability"] = customsJson["probability"].toDouble();
+            customs["probability"] =
+                customsJson["probability"].toDouble();
         }
         
         if (customsJson.contains("delay_mean")) {
-            customs["delay_mean"] = customsJson["delay_mean"].toDouble();
+            customs["delay_mean"] =
+                customsJson["delay_mean"].toDouble();
         }
         
         if (customsJson.contains("delay_variance")) {
-            customs["delay_variance"] = customsJson["delay_variance"].toDouble();
+            customs["delay_variance"] =
+                customsJson["delay_variance"].toDouble();
         }
     }
     
@@ -759,7 +872,7 @@ Terminal* Terminal::fromJson(const QJsonObject& json, const QString& pathToTermi
         customs,
         cost,
         pathToTerminalFolder
-    );
+        );
     
     return terminal;
 }

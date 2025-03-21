@@ -17,7 +17,8 @@
 namespace TerminalSim {
 
 /**
- * @brief Terminal class representing a container terminal with various operations
+ * @brief Terminal class representing a container
+ *        terminal with various operations
  */
 class Terminal : public QObject {
     Q_OBJECT
@@ -37,38 +38,54 @@ public:
     Terminal(
         const QString& terminalName,
         const QMap<TerminalInterface, QSet<TransportationMode>>& interfaces,
-        const QMap<QPair<TransportationMode, QString>, QString>& modeNetworkAliases = {},
+        const QMap<QPair<TransportationMode, QString>,
+                   QString>& modeNetworkAliases = {},
         const QVariantMap& capacity = {},
         const QVariantMap& dwellTime = {},
         const QVariantMap& customs = {},
         const QVariantMap& cost = {},
         const QString& pathToTerminalFolder = QString()
-    );
+        );
     
     ~Terminal();
 
     // Alias management
-    QString getAliasByModeNetwork(TransportationMode mode, const QString& network) const;
-    void addAliasForModeNetwork(TransportationMode mode, const QString& network, const QString& alias);
+    QString getAliasByModeNetwork(TransportationMode mode,
+                                  const QString& network) const;
+    void addAliasForModeNetwork(TransportationMode mode,
+                                const QString& network,
+                                const QString& alias);
     
     // Capacity management
     QPair<bool, QString> checkCapacityStatus(int additionalContainers) const;
     
     // Container handling
     double estimateContainerHandlingTime() const;
-    double estimateContainerCost(const ContainerCore::Container* container = nullptr, bool applyCustoms = false) const;
-    bool canAcceptTransport(TransportationMode mode, TerminalInterface side) const;
+    double
+    estimateContainerCost(const ContainerCore::Container* container = nullptr,
+                          bool applyCustoms = false) const;
+    bool canAcceptTransport(TransportationMode mode,
+                            TerminalInterface side) const;
     
     // Container operations
-    void addContainer(const ContainerCore::Container& container, double addingTime = -1);
-    void addContainers(const QList<ContainerCore::Container>& containers, double addingTime = -1);
-    void addContainersFromJson(const QJsonObject& containers, double addingTime = -1);
+    void addContainer(const ContainerCore::Container& container,
+                      double addingTime = -1);
+    void addContainers(const QList<ContainerCore::Container>& containers,
+                       double addingTime = -1);
+    void addContainersFromJson(const QJsonObject& containers,
+                               double addingTime = -1);
     
     // Container queries
-    QJsonArray getContainersByDepatingTime(double departingTime, const QString& condition = "<") const;
-    QJsonArray getContainersByAddedTime(double addedTime, const QString& condition) const;
-    QJsonArray getContainersByNextDestination(const QString& destination) const;
-    QJsonArray dequeueContainersByNextDestination(const QString& destination);
+    QJsonArray
+    getContainersByDepatingTime(double departingTime,
+                                const QString& condition = "<") const;
+    QJsonArray
+    getContainersByAddedTime(double addedTime,
+                             const QString& condition) const;
+    QJsonArray
+    getContainersByNextDestination(const QString& destination) const;
+    QJsonArray
+    dequeueContainersByNextDestination(const QString& destination);
     
     // Terminal status
     int getContainerCount() const;
@@ -78,11 +95,13 @@ public:
     
     // Getters
     const QString& getTerminalName() const { return m_terminalName; }
-    const QMap<TerminalInterface, QSet<TransportationMode>>& getInterfaces() const { return m_interfaces; }
+    const QMap<TerminalInterface, QSet<TransportationMode>>&
+    getInterfaces() const { return m_interfaces; }
 
     // Serialization
     QJsonObject toJson() const;
-    static Terminal* fromJson(const QJsonObject& json, const QString& pathToTerminalFolder = QString());
+    static Terminal* fromJson(const QJsonObject& json,
+                              const QString& pathToTerminalFolder = QString());
     
 private:
     // Terminal properties
