@@ -65,7 +65,22 @@ private:
      * @return Terminal pointer or nullptr if not found
      */
     Terminal* getTerminalFromParams(const QVariantMap& params);
-    
+
+    /**
+     * @brief Maps a command name to its corresponding event name for client
+     * response.
+     * This function translates command names (like "add_terminal") to
+     * event names (like "terminalAdded") that the client expects in the
+     * response. The client uses these event names to match responses with
+     * waiting commands.
+     * @param command The command name to translate
+     * @return The corresponding event name that the client is expecting
+     * @note Even for failed commands, the appropriate event name should
+     * be returned so that the client can properly handle errors and unblock
+     * waiting calls.
+     */
+    QString determineEventName(const QString &command);
+
     // Command handlers
     QVariant handlePing(const QVariantMap& params);
     QVariant handleSerializeGraph(const QVariantMap& params);
