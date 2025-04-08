@@ -22,7 +22,7 @@ private slots:
         capacity["max_capacity"] = 100;
         capacity["critical_threshold"] = 0.8;
 
-        Terminal terminal("TestTerminal", interfaces, {}, capacity);
+        Terminal terminal("TestTerminal", "test", interfaces, {}, capacity);
 
         QCOMPARE(terminal.getTerminalName(), QString("TestTerminal"));
         QCOMPARE(terminal.getMaxCapacity(), 100);

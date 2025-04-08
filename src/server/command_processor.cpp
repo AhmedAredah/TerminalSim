@@ -615,7 +615,8 @@ QVariant CommandProcessor::handleResetServer(const QVariantMap &params)
 
 QVariant CommandProcessor::handleAddTerminal(const QVariantMap &params)
 {
-    if (!params.contains("terminal_names") || !params.contains("custom_config")
+    if (!params.contains("terminal_names") || !params.contains("display_name")
+        || !params.contains("custom_config")
         || !params.contains("terminal_interfaces"))
     {
         throw std::invalid_argument("Missing required parameters "
@@ -647,6 +648,8 @@ QVariant CommandProcessor::handleAddTerminal(const QVariantMap &params)
         throw std::invalid_argument("At least one terminal name must "
                                     "be provided");
     }
+
+    QString terminalDisplayName = params["display_name"].toString();
 
     // Extract custom config
     QVariantMap customConfig = params["custom_config"].toMap();
@@ -715,7 +718,8 @@ QVariant CommandProcessor::handleAddTerminal(const QVariantMap &params)
 
     // Add terminal to graph
     return m_graph
-        ->addTerminal(terminalNames, customConfig, terminalInterfaces, region)
+        ->addTerminal(terminalNames, terminalDisplayName, customConfig,
+                      terminalInterfaces, region)
         ->toJson();
 }
 

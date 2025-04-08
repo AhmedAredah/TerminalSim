@@ -129,7 +129,8 @@ void TerminalGraph::setCostFunctionParameters(const QVariantMap &params)
  * Creates and adds a terminal with aliases.
  */
 Terminal *TerminalGraph::addTerminal(
-    const QStringList &names, const QVariantMap &config,
+    const QStringList &names, const QString &terminalDisplayName,
+    const QVariantMap                                       &config,
     const QMap<TerminalInterface, QSet<TransportationMode>> &interfaces,
     const QString                                           &region)
 {
@@ -148,7 +149,7 @@ Terminal *TerminalGraph::addTerminal(
 
     // Create new terminal instance
     Terminal *term = new Terminal(
-        canonical, interfaces,
+        canonical, terminalDisplayName, interfaces,
         QMap<QPair<TransportationMode, QString>, QString>(),
         config.value("capacity").toMap(), config.value("dwell_time").toMap(),
         config.value("customs").toMap(), config.value("cost").toMap(),
@@ -1450,6 +1451,8 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
     // Cache of excluded edges for each root path
     QHash<QString, QSet<EdgeIdentifier>> exclusionCache;
 
+    int saved_k = 0;
+
     // Yen's algorithm main loop
     for (int k = 1; k < n; ++k)
     {
@@ -1457,6 +1460,8 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
         {
             break; // No more paths available from previous round
         }
+
+        saved_k = k;
 
         const Path               &prevPath = result[k - 1];
         const QList<PathSegment> &prevSegs = prevPath.segments;
@@ -1688,6 +1693,11 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
         // Mark path as found
         pathsFound.insert(bestPath.nodes);
     }
+
+    // Add after the outer for loop in findTopNShortestPaths
+    qDebug() << "Loop completed with k =" << saved_k
+             << "result.size() =" << result.size()
+             << "potentialPaths.size() =" << potentialPaths.size();
 
     qDebug() << "Found" << result.size() << "shortest paths";
     return result;

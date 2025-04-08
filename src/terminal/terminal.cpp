@@ -18,28 +18,27 @@
 namespace TerminalSim {
 
 Terminal::Terminal(
-    const QString& terminalName,
-    const QMap<TerminalInterface, QSet<TransportationMode>>& interfaces,
-    const QMap<QPair<TransportationMode, QString>, QString>& modeNetworkAliases,
-    const QVariantMap& capacity,
-    const QVariantMap& dwellTime,
-    const QVariantMap& customs,
-    const QVariantMap& cost,
-    const QString& pathToTerminalFolder
-    ) : QObject(nullptr),
-    m_terminalName(terminalName),
-    m_interfaces(interfaces),
-    m_modeNetworkAliases(modeNetworkAliases),
-    m_maxCapacity(std::numeric_limits<int>::max()),
-    m_criticalThreshold(0.9),
-    m_customsProbability(0.0),
-    m_customsDelayMean(0.0),
-    m_customsDelayVariance(0.0),
-    m_fixedCost(0.0),
-    m_customsCost(0.0),
-    m_riskFactor(0.0),
-    m_storage(nullptr),
-    m_folderPath(pathToTerminalFolder)
+    const QString &terminalName, const QString &displayName,
+    const QMap<TerminalInterface, QSet<TransportationMode>> &interfaces,
+    const QMap<QPair<TransportationMode, QString>, QString> &modeNetworkAliases,
+    const QVariantMap &capacity, const QVariantMap &dwellTime,
+    const QVariantMap &customs, const QVariantMap &cost,
+    const QString &pathToTerminalFolder)
+    : QObject(nullptr)
+    , m_terminalName(terminalName)
+    , m_displayName(displayName)
+    , m_interfaces(interfaces)
+    , m_modeNetworkAliases(modeNetworkAliases)
+    , m_maxCapacity(std::numeric_limits<int>::max())
+    , m_criticalThreshold(0.9)
+    , m_customsProbability(0.0)
+    , m_customsDelayMean(0.0)
+    , m_customsDelayVariance(0.0)
+    , m_fixedCost(0.0)
+    , m_customsCost(0.0)
+    , m_riskFactor(0.0)
+    , m_storage(nullptr)
+    , m_folderPath(pathToTerminalFolder)
 {
     // Process capacity parameters
     if (!capacity.isEmpty()) {
@@ -631,6 +630,7 @@ QJsonObject Terminal::toJson() const
 
     // Terminal properties
     json["terminal_name"] = m_terminalName;
+    json["display_name"]  = m_displayName;
 
     // Interfaces
     QJsonObject interfacesJson;
@@ -729,7 +729,8 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
         return nullptr;
     }
     QString terminalName = json["terminal_name"].toString();
-    
+    QString displayName  = json["display_name"].toString();
+
     // Extract interfaces
     QMap<TerminalInterface,
          QSet<TransportationMode>> interfaces;
@@ -863,17 +864,10 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     }
     
     // Create terminal
-    Terminal* terminal = new Terminal(
-        terminalName,
-        interfaces,
-        modeNetworkAliases,
-        capacity,
-        dwellTime,
-        customs,
-        cost,
-        pathToTerminalFolder
-        );
-    
+    Terminal *terminal =
+        new Terminal(terminalName, displayName, interfaces, modeNetworkAliases,
+                     capacity, dwellTime, customs, cost, pathToTerminalFolder);
+
     return terminal;
 }
 

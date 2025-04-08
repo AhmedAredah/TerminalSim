@@ -77,12 +77,14 @@ public:
     /**
      * @brief Adds a terminal to the graph
      * @param names List of terminal names (first is canonical)
+     * @param terminalDisplayName Display name for the terminal
      * @param config Custom configuration for the terminal
      * @param interfaces Terminal interfaces and modes
      * @param region Region the terminal belongs to
      */
     Terminal *addTerminal(
-        const QStringList &names, const QVariantMap &config,
+        const QStringList &names, const QString &terminalDisplayName,
+        const QVariantMap                                       &config,
         const QMap<TerminalInterface, QSet<TransportationMode>> &interfaces,
         const QString &region = QString());
 

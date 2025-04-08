@@ -84,7 +84,8 @@ private slots:
 
         // Add a terminal with aliases
         QStringList terminalNames = {"Terminal1", "T1", "Port1"};
-        graph.addTerminal(terminalNames, customConfig, interfaces, "Region1");
+        graph.addTerminal(terminalNames, "test", customConfig, interfaces,
+                          "Region1");
         qDebug() << "Added Terminal1 with aliases";
 
         // Verify terminal was added
@@ -103,7 +104,8 @@ private slots:
         qDebug() << "Verified Terminal1 aliases list";
 
         // Add another terminal
-        graph.addTerminal(QStringList{"Terminal2"}, customConfig, interfaces, "Region2");
+        graph.addTerminal(QStringList{"Terminal2"}, "test", customConfig,
+                          interfaces, "Region2");
         qDebug() << "Added Terminal2";
         QCOMPARE(graph.getTerminalCount(), 2);
 
@@ -168,9 +170,12 @@ private slots:
         QVariantMap customConfig;
         customConfig["capacity"] = QVariantMap{{"max_capacity", 1000}};
 
-        graph.addTerminal(QStringList{"TerminalA"}, customConfig, interfaces, "RegionA");
-        graph.addTerminal(QStringList{"TerminalB"}, customConfig, interfaces, "RegionA");
-        graph.addTerminal(QStringList{"TerminalC"}, customConfig, interfaces, "RegionB");
+        graph.addTerminal(QStringList{"TerminalA"}, "test", customConfig,
+                          interfaces, "RegionA");
+        graph.addTerminal(QStringList{"TerminalB"}, "test", customConfig,
+                          interfaces, "RegionA");
+        graph.addTerminal(QStringList{"TerminalC"}, "test", customConfig,
+                          interfaces, "RegionB");
 
         // Add routes
         QVariantMap routeAttributes;
@@ -230,10 +235,14 @@ private slots:
         QVariantMap customConfig;
         customConfig["capacity"] = QVariantMap{{"max_capacity", 1000}};
 
-        graph.addTerminal(QStringList{"A"}, customConfig, interfaces, "Region1");
-        graph.addTerminal(QStringList{"B"}, customConfig, interfaces, "Region1");
-        graph.addTerminal(QStringList{"C"}, customConfig, interfaces, "Region1");
-        graph.addTerminal(QStringList{"D"}, customConfig, interfaces, "Region2");
+        graph.addTerminal(QStringList{"A"}, "test", customConfig, interfaces,
+                          "Region1");
+        graph.addTerminal(QStringList{"B"}, "test", customConfig, interfaces,
+                          "Region1");
+        graph.addTerminal(QStringList{"C"}, "test", customConfig, interfaces,
+                          "Region1");
+        graph.addTerminal(QStringList{"D"}, "test", customConfig, interfaces,
+                          "Region2");
 
         // Add routes with different costs
         QVariantMap routeAB;
@@ -305,7 +314,8 @@ private slots:
         QVariantMap customConfig;
         customConfig["capacity"] = QVariantMap{{"max_capacity", 1000}};
 
-        graph.addTerminal(QStringList{"TestTerminal", "TT"}, customConfig, interfaces, "TestRegion");
+        graph.addTerminal(QStringList{"TestTerminal", "TT"}, "test",
+                          customConfig, interfaces, "TestRegion");
 
         // Add a route
         QVariantMap routeAttributes;
@@ -351,10 +361,14 @@ private slots:
         QVariantMap customConfig;
         customConfig["capacity"] = QVariantMap{{"max_capacity", 1000}};
 
-        graph.addTerminal(QStringList{"TA1"}, customConfig, interfaces, "RegionA");
-        graph.addTerminal(QStringList{"TA2"}, customConfig, interfaces, "RegionA");
-        graph.addTerminal(QStringList{"TB1"}, customConfig, interfaces, "RegionB");
-        graph.addTerminal(QStringList{"TB2"}, customConfig, interfaces, "RegionB");
+        graph.addTerminal(QStringList{"TA1"}, "test", customConfig, interfaces,
+                          "RegionA");
+        graph.addTerminal(QStringList{"TA2"}, "test", customConfig, interfaces,
+                          "RegionA");
+        graph.addTerminal(QStringList{"TB1"}, "test", customConfig, interfaces,
+                          "RegionB");
+        graph.addTerminal(QStringList{"TB2"}, "test", customConfig, interfaces,
+                          "RegionB");
 
         // Get terminals by region
         QStringList regionATerminals = graph.getTerminalsByRegion("RegionA");
