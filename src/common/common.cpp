@@ -65,11 +65,12 @@ TerminalInterface EnumUtils::stringToTerminalInterface(const QString& str) {
     
     // Try to convert from number if string contains a number
     value = str.toInt(&ok);
-    if (ok && value >= 0 &&
-        value <= static_cast<int>(TerminalInterface::RAIL_SIDE)) {
+    if (ok && value >= 0
+        && value <= static_cast<int>(TerminalInterface::AIR_SIDE))
+    {
         return static_cast<TerminalInterface>(value);
     }
-    
+
     // Return default value if conversion fails
     qWarning() << "Invalid TerminalInterface string:"
                << str
@@ -86,8 +87,8 @@ bool canModeUseInterface(TransportationMode mode,
             return interface == TerminalInterface::LAND_SIDE;
             
         case TransportationMode::Train:
-            return interface == TerminalInterface::RAIL_SIDE;
-            
+            return interface == TerminalInterface::LAND_SIDE;
+
         case TransportationMode::Ship:
             return interface == TerminalInterface::SEA_SIDE;
             
@@ -121,10 +122,10 @@ QString getTerminalInterfaceDescription(TerminalInterface interface) {
             
         case TerminalInterface::SEA_SIDE:
             return QObject::tr("Sea-side interface for ship operations");
-            
-        case TerminalInterface::RAIL_SIDE:
-            return QObject::tr("Rail-side interface for train operations");
-            
+
+        case TerminalInterface::AIR_SIDE:
+            return QObject::tr("Air_side interface for train operations");
+
         default:
             return QObject::tr("Unknown terminal interface");
     }
