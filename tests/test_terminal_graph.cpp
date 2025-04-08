@@ -162,7 +162,8 @@ private slots:
         // Create terminals
         QMap<TerminalInterface, QSet<TransportationMode>> interfaces;
         interfaces[TerminalInterface::LAND_SIDE].insert(TransportationMode::Truck);
-        interfaces[TerminalInterface::RAIL_SIDE].insert(TransportationMode::Train);
+        interfaces[TerminalInterface::LAND_SIDE].insert(
+            TransportationMode::Train);
 
         QVariantMap customConfig;
         customConfig["capacity"] = QVariantMap{{"max_capacity", 1000}};
