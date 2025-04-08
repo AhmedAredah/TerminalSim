@@ -17,6 +17,27 @@
 
 namespace TerminalSim {
 
+struct EdgeIdentifier
+{
+    QString            from;
+    QString            to;
+    TransportationMode mode;
+
+    bool operator==(const EdgeIdentifier &other) const
+    {
+        return from == other.from && to == other.to && mode == other.mode;
+    }
+};
+
+// Need a hash function for QSet
+inline uint qHash(const EdgeIdentifier &edge, uint seed = 0)
+{
+    seed ^= qHash(edge.from, seed);
+    seed ^= qHash(edge.to, seed);
+    seed ^= static_cast<uint>(edge.mode); // safe fallback
+    return seed;
+}
+
 /**
  * @class TerminalGraph
  * @brief Manages a network of terminals and routes
@@ -60,11 +81,10 @@ public:
      * @param interfaces Terminal interfaces and modes
      * @param region Region the terminal belongs to
      */
-    void addTerminal(const QStringList& names,
-                     const QVariantMap& config,
-                     const QMap<TerminalInterface,
-                                QSet<TransportationMode>>& interfaces,
-                     const QString& region = QString());
+    Terminal *addTerminal(
+        const QStringList &names, const QVariantMap &config,
+        const QMap<TerminalInterface, QSet<TransportationMode>> &interfaces,
+        const QString &region = QString());
 
     /**
      * @brief Adds an alias to an existing terminal
@@ -89,12 +109,13 @@ public:
      * @param end Ending terminal name
      * @param mode Transportation mode
      * @param attrs Route attributes
+     *
+     * @return Pair of start and end terminal names
      */
-    void addRoute(const QString& id,
-                  const QString& start,
-                  const QString& end,
-                  TransportationMode mode,
-                  const QVariantMap& attrs = QVariantMap());
+    QPair<QString, QString> addRoute(const QString &id, const QString &start,
+                                     const QString     &end,
+                                     TransportationMode mode,
+                                     const QVariantMap &attrs = QVariantMap());
 
     /**
      * @brief Gets edge attributes by mode
@@ -214,43 +235,38 @@ public:
      * @brief Finds the shortest path between terminals
      * @param start Starting terminal name
      * @param end Ending terminal name
-     * @param mode Transportation mode (default: Truck)
+     * @param mode Transportation mode (default: Any)
      * @return List of path segments
      */
-    QList<PathSegment> findShortestPath(
-        const QString& start,
-        const QString& end,
-        TransportationMode mode = TransportationMode::Truck) const;
+    QList<PathSegment>
+    findShortestPath(const QString &start, const QString &end,
+                     TransportationMode mode = TransportationMode::Any) const;
 
     /**
      * @brief Finds shortest path within regions
      * @param start Starting terminal name
      * @param end Ending terminal name
      * @param regions Allowed regions
-     * @param mode Transportation mode (default: Truck)
+     * @param mode Transportation mode (default: Any)
      * @return List of path segments
      */
     QList<PathSegment> findShortestPathWithinRegions(
-        const QString& start,
-        const QString& end,
-        const QStringList& regions,
-        TransportationMode mode = TransportationMode::Truck) const;
+        const QString &start, const QString &end, const QStringList &regions,
+        TransportationMode mode = TransportationMode::Any) const;
 
     /**
      * @brief Finds top N shortest paths
      * @param start Starting terminal name
      * @param end Ending terminal name
      * @param n Number of paths to find
-     * @param mode Transportation mode (default: Truck)
+     * @param mode Transportation mode (default: Any)
      * @param skipDelays Skip same-mode delays if true
      * @return List of paths
      */
-    QList<Path> findTopNShortestPaths(
-        const QString& start,
-        const QString& end,
-        int n = 5,
-        TransportationMode mode = TransportationMode::Truck,
-        bool skipDelays = true) const;
+    QList<Path>
+    findTopNShortestPaths(const QString &start, const QString &end, int n = 5,
+                          TransportationMode mode = TransportationMode::Any,
+                          bool               skipDelays = true) const;
 
     // Serialization
     /**
@@ -304,11 +320,18 @@ private:
 
     // Path finding with exclusions
     QList<PathSegment> findShortestPathWithExclusions(
-        const QString& start,
-        const QString& end,
-        TransportationMode mode,
-        const QSet<QPair<QString, QString>>& edges,
-        const QSet<QString>& nodes) const;
+        const QString &start, const QString &end,
+        TransportationMode requestedMode =
+            TransportationMode::Any, // Keep this to filter available edges
+        const QSet<EdgeIdentifier> &edgesToExclude = QSet<EdgeIdentifier>(),
+        const QSet<QString>        &nodesToExclude = QSet<QString>()) const;
+
+    // QList<PathSegment> findShortestPathWithExclusions(
+    //     const QString &start, const QString &end,
+    //     TransportationMode                   mode = TransportationMode::Any,
+    //     const QSet<QPair<QString, QString>> &edges =
+    //         QSet<QPair<QString, QString>>(),
+    //     const QSet<QString> &nodes = QSet<QString>()) const;
 };
 
 } // namespace TerminalSim
