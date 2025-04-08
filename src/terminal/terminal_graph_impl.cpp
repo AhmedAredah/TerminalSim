@@ -38,28 +38,62 @@ GraphImpl::findEdge(const QString& from,
     return nullptr;
 }
 
-void GraphImpl::addEdge(const QString& from,
-                                       const QString& to,
-                                       const QString& routeId,
-                                       TransportationMode mode,
-                                       const QVariantMap& attrs)
+void GraphImpl::addEdge(const QString &from, const QString &to,
+                        const QString &routeId, TransportationMode mode,
+                        const QVariantMap &attrs)
 {
-    if (!adjacencyList.contains(from)) {
+    // Create adjacency lists if needed
+    if (!adjacencyList.contains(from))
+    {
         adjacencyList[from] = QList<InternalEdge>();
     }
-    if (!adjacencyList.contains(to)) {
+    if (!adjacencyList.contains(to))
+    {
         adjacencyList[to] = QList<InternalEdge>();
     }
 
-    InternalEdge edge{to, routeId, mode, attrs};
-    QList<InternalEdge>& edges = adjacencyList[from];
-    for (int i = 0; i < edges.size(); ++i) {
-        if (edges[i].to == to && edges[i].mode == mode) {
-            edges[i] = edge;
-            return;
+    // Create forward edge (from → to)
+    InternalEdge         forwardEdge{to, routeId, mode, attrs};
+    QList<InternalEdge> &forwardEdges  = adjacencyList[from];
+    bool                 forwardExists = false;
+
+    // Update existing edge or add new one
+    for (int i = 0; i < forwardEdges.size(); ++i)
+    {
+        if (forwardEdges[i].to == to && forwardEdges[i].mode == mode)
+        {
+            forwardEdges[i] = forwardEdge;
+            forwardExists   = true;
+            break;
         }
     }
-    edges.append(edge);
+
+    if (!forwardExists)
+    {
+        forwardEdges.append(forwardEdge);
+    }
+
+    // Create reverse edge (to → from) with the same properties
+    // Only the destination node differs
+    InternalEdge         reverseEdge{from, routeId, mode, attrs};
+    QList<InternalEdge> &reverseEdges  = adjacencyList[to];
+    bool                 reverseExists = false;
+
+    // Update existing edge or add new one
+    for (int i = 0; i < reverseEdges.size(); ++i)
+    {
+        if (reverseEdges[i].to == from && reverseEdges[i].mode == mode)
+        {
+            reverseEdges[i] = reverseEdge;
+            reverseExists   = true;
+            break;
+        }
+    }
+
+    if (!reverseExists)
+    {
+        reverseEdges.append(reverseEdge);
+    }
 }
 
 void GraphImpl::removeNode(const QString& node)
