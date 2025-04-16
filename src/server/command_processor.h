@@ -87,7 +87,9 @@ private:
     QVariant handleDeserializeGraph(const QVariantMap& params);
     QVariant handleResetServer(const QVariantMap& params);
     QVariant handleAddTerminal(const QVariantMap& params);
+    QVariant handleAddTerminals(const QVariantMap &params);
     QVariant handleAddRoute(const QVariantMap& params);
+    QVariant handleAddRoutes(const QVariantMap &params);
     QVariant handleFindShortestPath(const QVariantMap& params);
     QVariant handleFindTopPaths(const QVariantMap& params);
     QVariant handleGetTerminal(const QVariantMap& params);

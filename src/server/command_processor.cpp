@@ -47,6 +47,9 @@ void CommandProcessor::registerCommands()
     registerCommand("add_terminal", [this](const QVariantMap &params) {
         return handleAddTerminal(params);
     });
+    registerCommand("add_terminals", [this](const QVariantMap &params) {
+        return handleAddTerminals(params);
+    });
     registerCommand("add_alias_to_terminal", [this](const QVariantMap &params) {
         QString terminalName = params.value("terminal_name").toString();
         QString alias        = params.value("alias").toString();
@@ -100,6 +103,9 @@ void CommandProcessor::registerCommands()
     // Route commands
     registerCommand("add_route", [this](const QVariantMap &params) {
         return handleAddRoute(params);
+    });
+    registerCommand("add_routes", [this](const QVariantMap &params) {
+        return handleAddRoutes(params);
     });
 
     registerCommand("change_route_weight", [this](const QVariantMap &params) {
@@ -451,6 +457,10 @@ QString CommandProcessor::determineEventName(const QString &command)
     {
         return "terminalAdded";
     }
+    else if (command == "add_terminals")
+    {
+        return "terminalsAdded";
+    }
     else if (command == "get_aliases_of_terminal")
     {
         return "terminalAliases";
@@ -473,6 +483,10 @@ QString CommandProcessor::determineEventName(const QString &command)
              || command == "connect_regions_by_mode")
     {
         return "routeAdded";
+    }
+    else if (command == "add_routes")
+    {
+        return "routesAdded";
     }
     else if (command == "find_shortest_path" || command == "find_top_paths")
     {
@@ -723,6 +737,41 @@ QVariant CommandProcessor::handleAddTerminal(const QVariantMap &params)
         ->toJson();
 }
 
+QVariant CommandProcessor::handleAddTerminals(const QVariantMap &params)
+{
+    if (!params.contains("terminals")
+        || !params["terminals"].canConvert<QVariantList>())
+    {
+        throw std::invalid_argument("Missing or invalid terminals parameter");
+    }
+
+    QVariantList       terminalsList = params["terminals"].toList();
+    QList<QVariantMap> terminalsData;
+
+    // Convert QVariantList to QList<QVariantMap>
+    for (const QVariant &terminal : terminalsList)
+    {
+        if (!terminal.canConvert<QVariantMap>())
+        {
+            throw std::invalid_argument("Invalid terminal data format");
+        }
+        terminalsData.append(terminal.toMap());
+    }
+
+    // Add terminals to graph
+    QMap<QString, Terminal *> addedTerminals =
+        m_graph->addTerminals(terminalsData);
+
+    // Create response
+    QJsonArray terminalsArray;
+    for (auto it = addedTerminals.begin(); it != addedTerminals.end(); ++it)
+    {
+        terminalsArray.append(it.value()->toJson());
+    }
+
+    return terminalsArray;
+}
+
 QVariant CommandProcessor::handleAddRoute(const QVariantMap &params)
 {
     if (!params.contains("route_id") || !params.contains("start_terminal")
@@ -770,6 +819,43 @@ QVariant CommandProcessor::handleAddRoute(const QVariantMap &params)
     startEndTerminalsJson["end_terminal"]   = startEndTerminals.second;
 
     return startEndTerminalsJson;
+}
+
+QVariant CommandProcessor::handleAddRoutes(const QVariantMap &params)
+{
+    if (!params.contains("routes")
+        || !params["routes"].canConvert<QVariantList>())
+    {
+        throw std::invalid_argument("Missing or invalid routes parameter");
+    }
+
+    QVariantList       routesList = params["routes"].toList();
+    QList<QVariantMap> routesData;
+
+    // Convert QVariantList to QList<QVariantMap>
+    for (const QVariant &route : routesList)
+    {
+        if (!route.canConvert<QVariantMap>())
+        {
+            throw std::invalid_argument("Invalid route data format");
+        }
+        routesData.append(route.toMap());
+    }
+
+    // Add routes to graph
+    QList<QPair<QString, QString>> addedRoutes = m_graph->addRoutes(routesData);
+
+    // Create response
+    QJsonArray routesArray;
+    for (const QPair<QString, QString> &route : addedRoutes)
+    {
+        QJsonObject routeObj;
+        routeObj["start_terminal"] = route.first;
+        routeObj["end_terminal"]   = route.second;
+        routesArray.append(routeObj);
+    }
+
+    return routesArray;
 }
 
 QVariant CommandProcessor::handleGetTerminal(const QVariantMap &params)
