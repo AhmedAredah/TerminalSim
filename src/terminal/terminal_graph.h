@@ -89,6 +89,16 @@ public:
         const QString &region = QString());
 
     /**
+     * @brief Adds multiple terminals to the graph simultaneously
+     * @param terminalsList List of terminal configurations
+     * @return QMap of canonical names to Terminal pointers
+     *
+     * Creates and adds multiple terminals in one operation.
+     */
+    QMap<QString, Terminal *>
+    addTerminals(const QList<QVariantMap> &terminalsList);
+
+    /**
      * @brief Adds an alias to an existing terminal
      * @param name Terminal name to alias
      * @param alias New alias to add
@@ -118,6 +128,16 @@ public:
                                      const QString     &end,
                                      TransportationMode mode,
                                      const QVariantMap &attrs = QVariantMap());
+
+    /**
+     * @brief Adds multiple routes between terminals simultaneously
+     * @param routesList List of route configurations
+     * @return QList of pairs with start and end terminal names
+     *
+     * Adds multiple routes with attributes to the graph in one operation.
+     */
+    QList<QPair<QString, QString>>
+    addRoutes(const QList<QVariantMap> &routesList);
 
     /**
      * @brief Gets edge attributes by mode
