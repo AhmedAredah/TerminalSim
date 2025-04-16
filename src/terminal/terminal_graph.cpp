@@ -1790,11 +1790,18 @@ bool TerminalGraph::shouldSkipCosts(PathFindingContext       &context,
                                     const QList<PathSegment> &segments) const
 {
 
-    if (!context.skipDelays)
-        return false;
+    // Skip costs for the first and last terminals (origin and
+    // destination)
     if (terminalIndex == 0 || terminalIndex >= segments.size())
-        return false;
-    return segments[terminalIndex - 1].mode == segments[terminalIndex].mode;
+        return true;
+
+    // Check if there is a mode change at this terminal
+    bool modeChanges =
+        segments[terminalIndex - 1].mode != segments[terminalIndex].mode;
+
+    // If skipDelays is true: skip terminal costs only when modes match
+    // If skipDelays is false: do not skip terminal costs
+    return context.skipDelays ? !modeChanges : false;
 }
 
 /**
@@ -1813,29 +1820,50 @@ Path TerminalGraph::buildPathDetails(PathFindingContext       &context,
                                      const QList<PathSegment> &segments,
                                      int                       pathId) const
 {
-
     double             totalEdgeCosts     = 0.0;
     double             totalTerminalCosts = 0.0;
     QList<QVariantMap> terminalsInPath;
 
-    // Add start terminal info
-    const PathFindingContext::TermInfo &startInfo =
-        getTermInfo(context, context.startCanonical);
-    QVariantMap startTerm;
-    startTerm["terminal"]      = context.startCanonical;
-    startTerm["handling_time"] = startInfo.handlingTime;
-    startTerm["cost"]          = startInfo.cost;
-    startTerm["costs_skipped"] = false;
-    terminalsInPath.append(startTerm);
-    totalTerminalCosts += startInfo.cost;
-
     // Process segments
-    for (int i = 0; i < segments.size(); ++i)
+    for (int i = 0; i < segments.size(); i++)
     {
         const PathSegment &seg = segments[i];
-        totalEdgeCosts += seg.weight;
 
-        // Get terminal info for destination node
+        // For edge costs, exclude the terminal costs that were included during
+        // pathfinding We'll recalculate terminal costs separately with the
+        // correct logic
+        QVariantMap edgeAttrs = seg.attributes;
+        edgeAttrs.remove("terminal_delay");
+        edgeAttrs.remove("terminal_cost");
+
+        // Recalculate the edge weight without terminal costs
+        double edgeWeight =
+            computeCost(edgeAttrs, m_costFunctionParametersWeights, seg.mode);
+        totalEdgeCosts += edgeWeight;
+
+        // Add start terminal info (only for first segment)
+        if (i == 0)
+        {
+            const PathFindingContext::TermInfo &startInfo =
+                getTermInfo(context, seg.from);
+            QVariantMap startTerm;
+            startTerm["terminal"]      = seg.from;
+            startTerm["handling_time"] = startInfo.handlingTime;
+            startTerm["cost"]          = startInfo.cost;
+
+            // Apply the skip logic for origin terminal
+            bool skipOrigin            = context.skipDelays;
+            startTerm["costs_skipped"] = skipOrigin;
+
+            terminalsInPath.append(startTerm);
+
+            if (!skipOrigin)
+            {
+                totalTerminalCosts += startInfo.cost;
+            }
+        }
+
+        // Add destination terminal info
         const PathFindingContext::TermInfo &termInfo =
             getTermInfo(context, seg.to);
 
