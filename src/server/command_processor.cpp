@@ -43,6 +43,11 @@ void CommandProcessor::registerCommands()
         return handleResetServer(params);
     });
 
+    registerCommand("set_cost_function_parameters",
+                    [this](const QVariantMap &params) {
+                        return handleSetCostFunctionParameters(params);
+                    });
+
     // Terminal commands
     registerCommand("add_terminal", [this](const QVariantMap &params) {
         return handleAddTerminal(params);
@@ -370,13 +375,13 @@ QVariant CommandProcessor::processCommand(const QString     &command,
     try
     {
         QVariantMap processedParams = deserializeParams(params);
-        qDebug() << "After deserializeParams:" << processedParams;
+        // qDebug() << "After deserializeParams:" << processedParams;
 
         QVariant result = m_commandHandlers[command](processedParams);
-        qDebug() << "Result from handler:" << result;
+        // qDebug() << "Result from handler:" << result;
 
         QVariant serializedResult = serializeResponse(result);
-        qDebug() << "After serializeResponse:" << serializedResult;
+        // qDebug() << "After serializeResponse:" << serializedResult;
 
         return serializedResult;
     }
@@ -527,6 +532,10 @@ QString CommandProcessor::determineEventName(const QString &command)
     {
         return "serverReset";
     }
+    else if (command == "set_cost_function_parameters")
+    {
+        return "costFunctionUpdated";
+    }
     else
     {
         return "errorOccurred"; // Default event for unknown commands
@@ -611,7 +620,7 @@ QVariant CommandProcessor::handleResetServer(const QVariantMap &params)
     // Reinitialize any default settings
     // reset default link attributes or cost function parameters
     m_graph->setLinkDefaultAttributes({{"cost", 1.0},
-                                       {"travellTime", 1.0},
+                                       {"travelTime", 1.0},
                                        {"distance", 1.0},
                                        {"carbonEmissions", 1.0},
                                        {"risk", 1.0},
@@ -625,6 +634,58 @@ QVariant CommandProcessor::handleResetServer(const QVariantMap &params)
     response["status"]  = "success";
     response["message"] = "Server has been reset to a fresh state";
     return response;
+}
+
+QVariant
+CommandProcessor::handleSetCostFunctionParameters(const QVariantMap &params)
+{
+    if (!params.contains("parameters")
+        || !params["parameters"].canConvert<QVariantMap>())
+    {
+        throw std::invalid_argument("Missing or invalid parameters parameter");
+    }
+
+    QVariantMap costParameters = params["parameters"].toMap();
+
+    // Verify required mode entries exist
+    QStringList requiredModes = {
+        "default", QString::number(static_cast<int>(TransportationMode::Ship)),
+        QString::number(static_cast<int>(TransportationMode::Train)),
+        QString::number(static_cast<int>(TransportationMode::Truck))};
+
+    for (const QString &mode : requiredModes)
+    {
+        if (!costParameters.contains(mode)
+            || !costParameters[mode].canConvert<QVariantMap>())
+        {
+            throw std::invalid_argument(
+                QString("Missing or invalid parameters for mode: %1")
+                    .arg(mode)
+                    .toStdString());
+        }
+
+        // For each mode, verify required cost attributes exist
+        QVariantMap modeParams    = costParameters[mode].toMap();
+        QStringList requiredAttrs = {
+            "cost", "travelTime",        "distance",       "carbonEmissions",
+            "risk", "energyConsumption", "terminal_delay", "terminal_cost"};
+
+        for (const QString &attr : requiredAttrs)
+        {
+            if (!modeParams.contains(attr)
+                || !modeParams[attr].canConvert<double>())
+            {
+                throw std::invalid_argument(
+                    QString("Missing or invalid %1 parameter for mode %2")
+                        .arg(attr, mode)
+                        .toStdString());
+            }
+        }
+    }
+
+    // All validations passed, update cost function parameters
+    m_graph->setCostFunctionParameters(costParameters);
+    return QVariant(true);
 }
 
 QVariant CommandProcessor::handleAddTerminal(const QVariantMap &params)

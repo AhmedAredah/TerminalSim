@@ -55,6 +55,15 @@ struct EdgeIdentifier
     {
         return from == other.from && to == other.to && mode == other.mode;
     }
+
+    bool operator<(const EdgeIdentifier &other) const
+    {
+        if (from != other.from)
+            return from < other.from;
+        if (to != other.to)
+            return to < other.to;
+        return static_cast<int>(mode) < static_cast<int>(other.mode);
+    }
 };
 
 /**
@@ -733,6 +742,10 @@ private:
      * final step in the findTopNShortestPaths algorithm.
      */
     QList<Path> sortAndFinalizePaths(QList<Path> &result, int n) const;
+
+    QList<PathSegment> findShortestPathWithPerturbedCosts(
+        const QString &start, const QString &end, TransportationMode mode,
+        const QMap<EdgeIdentifier, double> &costMultipliers) const;
 };
 
 } // namespace TerminalSim

@@ -180,7 +180,7 @@ private slots:
         // Add routes
         QVariantMap routeAttributes;
         routeAttributes["distance"] = 100.0;
-        routeAttributes["travellTime"] = 2.0;
+        routeAttributes["travelTime"] = 2.0;
         routeAttributes["cost"] = 50.0;
 
         graph.addRoute("Route1", "TerminalA", "TerminalB", TransportationMode::Truck, routeAttributes);

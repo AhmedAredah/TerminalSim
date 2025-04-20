@@ -47,7 +47,7 @@ TerminalGraph::TerminalGraph(const QString &dir)
     // Initialize default cost function parameters
     m_costFunctionParametersWeights = {
         {"default", QVariantMap{{"cost", 1.0},
-                                {"travellTime", 1.0},
+                                {"travelTime", 1.0},
                                 {"distance", 1.0},
                                 {"carbonEmissions", 1.0},
                                 {"risk", 1.0},
@@ -56,7 +56,7 @@ TerminalGraph::TerminalGraph(const QString &dir)
                                 {"terminal_cost", 1.0}}},
         {QString::number(static_cast<int>(TransportationMode::Ship)),
          QVariantMap{{"cost", 1.0},
-                     {"travellTime", 1.0},
+                     {"travelTime", 1.0},
                      {"distance", 1.0},
                      {"carbonEmissions", 1.0},
                      {"risk", 1.0},
@@ -65,7 +65,7 @@ TerminalGraph::TerminalGraph(const QString &dir)
                      {"terminal_cost", 1.0}}},
         {QString::number(static_cast<int>(TransportationMode::Train)),
          QVariantMap{{"cost", 1.0},
-                     {"travellTime", 1.0},
+                     {"travelTime", 1.0},
                      {"distance", 1.0},
                      {"carbonEmissions", 1.0},
                      {"risk", 1.0},
@@ -74,7 +74,7 @@ TerminalGraph::TerminalGraph(const QString &dir)
                      {"terminal_cost", 1.0}}},
         {QString::number(static_cast<int>(TransportationMode::Truck)),
          QVariantMap{{"cost", 1.0},
-                     {"travellTime", 1.0},
+                     {"travelTime", 1.0},
                      {"distance", 1.0},
                      {"carbonEmissions", 1.0},
                      {"risk", 1.0},
@@ -83,7 +83,7 @@ TerminalGraph::TerminalGraph(const QString &dir)
                      {"terminal_cost", 1.0}}}};
 
     // Set default link attributes
-    m_defaultLinkAttributes = {{"cost", 1.0},     {"travellTime", 1.0},
+    m_defaultLinkAttributes = {{"cost", 1.0},     {"travelTime", 1.0},
                                {"distance", 1.0}, {"carbonEmissions", 1.0},
                                {"risk", 1.0},     {"energyConsumption", 1.0}};
 
@@ -1737,12 +1737,18 @@ TerminalGraph::generatePathSignature(const QList<PathSegment> &segments) const
     QString signature;
     if (!segments.isEmpty())
     {
-        signature = segments.first().from;
+        signature        = segments.first().from;
+        double totalCost = 0.0;
         for (const PathSegment &seg : segments)
         {
             signature += "->" + seg.to + ":"
                          + QString::number(static_cast<int>(seg.mode));
+            totalCost += seg.weight;
         }
+        // Add cost information to allow similar paths with different costs
+        signature += ":total_cost_"
+                     + QString::number(qRound(totalCost / 10.0)
+                                       * 10); // Use cost buckets
     }
     return signature;
 }
@@ -2108,6 +2114,137 @@ bool TerminalGraph::hasMultiSegmentPaths(const QList<Path> &paths) const
     return false;
 }
 
+QList<PathSegment> TerminalGraph::findShortestPathWithPerturbedCosts(
+    const QString &start, const QString &end, TransportationMode mode,
+    const QMap<EdgeIdentifier, double> &costMultipliers) const
+{
+    QString startCanonical = getCanonicalName(start);
+    QString endCanonical   = getCanonicalName(end);
+
+    // Validate terminal existence
+    if (!m_terminals.contains(startCanonical)
+        || !m_terminals.contains(endCanonical))
+    {
+        throw std::invalid_argument("Terminal not found");
+    }
+
+    // Setup for Dijkstra's algorithm
+    QHash<QString, double>             distance;
+    QHash<QString, QString>            previous;
+    QHash<QString, TransportationMode> edgeMode;
+    QHash<QString, QVariantMap>        edgeAttrs;
+
+    // Initialize distances
+    QStringList nodes = m_graph->getNodes();
+    for (const QString &node : nodes)
+    {
+        distance[node] = std::numeric_limits<double>::infinity();
+        previous[node] = QString();
+    }
+    distance[startCanonical] = 0.0;
+
+    // Priority queue
+    typedef QPair<double, QString> NodeDist;
+    auto cmp = [](const NodeDist &a, const NodeDist &b) {
+        return a.first > b.first;
+    };
+    std::priority_queue<NodeDist, std::vector<NodeDist>, decltype(cmp)> pq(cmp);
+
+    pq.push({0.0, startCanonical});
+    QSet<QString> processed;
+
+    while (!pq.empty())
+    {
+        NodeDist current = pq.top();
+        pq.pop();
+
+        QString currentNode = current.second;
+
+        if (processed.contains(currentNode))
+            continue;
+
+        if (currentNode == endCanonical)
+            break;
+
+        processed.insert(currentNode);
+
+        // Process adjacent nodes
+        for (const GraphImpl::InternalEdge &edge :
+             m_graph->adjacencyList[currentNode])
+        {
+            // Skip if mode doesn't match and a specific mode is requested
+            if (mode != TransportationMode::Any && edge.mode != mode)
+                continue;
+
+            QString neighbor = edge.to;
+            if (processed.contains(neighbor))
+                continue;
+
+            // Calculate terminal costs
+            Terminal *currTerm = m_terminals[currentNode];
+            Terminal *nextTerm = m_terminals[neighbor];
+            double    delay    = currTerm->estimateContainerHandlingTime()
+                           + nextTerm->estimateContainerHandlingTime();
+            double cost = currTerm->estimateContainerCost()
+                          + nextTerm->estimateContainerCost();
+
+            // Prepare parameters for cost function
+            QVariantMap params       = edge.attributes;
+            params["terminal_delay"] = delay;
+            params["terminal_cost"]  = cost;
+
+            // Compute total cost using the cost function
+            double edgeCost =
+                computeCost(params, m_costFunctionParametersWeights, edge.mode);
+
+            // Apply cost multiplier if this edge is in the map
+            EdgeIdentifier edgeId = {currentNode, neighbor, edge.mode};
+            if (costMultipliers.contains(edgeId))
+            {
+                edgeCost *= costMultipliers[edgeId];
+            }
+
+            double newDist = distance[currentNode] + edgeCost;
+            if (newDist < distance[neighbor])
+            {
+                distance[neighbor]  = newDist;
+                previous[neighbor]  = currentNode;
+                edgeMode[neighbor]  = edge.mode;
+                edgeAttrs[neighbor] = edge.attributes;
+                pq.push({newDist, neighbor});
+            }
+        }
+    }
+
+    // Reconstruct the path
+    QList<PathSegment> path;
+
+    // Check if path exists
+    if (previous[endCanonical].isEmpty() && startCanonical != endCanonical)
+    {
+        throw std::runtime_error("No path found");
+    }
+
+    // Build path from end to start, then reverse
+    QString current = endCanonical;
+    while (!previous[current].isEmpty())
+    {
+        PathSegment seg;
+        seg.from           = previous[current];
+        seg.to             = current;
+        seg.mode           = edgeMode[current];
+        seg.weight         = distance[current] - distance[seg.from];
+        seg.fromTerminalId = seg.from;
+        seg.toTerminalId   = seg.to;
+        seg.attributes     = edgeAttrs[current];
+
+        path.prepend(seg);
+        current = seg.from;
+    }
+
+    return path;
+}
+
 /**
  * @brief Find additional paths using edge exclusion method
  * @param context Path finding context
@@ -2125,155 +2262,122 @@ bool TerminalGraph::hasMultiSegmentPaths(const QList<Path> &paths) const
 void TerminalGraph::findAdditionalPathsByEdgeExclusion(
     PathFindingContext &context, QList<Path> &result, int n) const
 {
+    // Create a map of edge cost multipliers
+    QMap<EdgeIdentifier, double> edgeCostMultipliers;
 
-    // Create a set of key edges from all non-direct paths
-    QSet<QPair<QString, QPair<QString, int>>> keyEdges; // From, To, Mode
+    // Collect edges from existing paths
+    QSet<EdgeIdentifier> existingEdges;
     for (const Path &path : result)
     {
-        if (path.segments.size() > 1)
-        { // Only consider multi-segment paths
-            for (const PathSegment &segment : path.segments)
-            {
-                keyEdges.insert(qMakePair(
-                    segment.from,
-                    qMakePair(segment.to, static_cast<int>(segment.mode))));
-            }
+        for (const PathSegment &segment : path.segments)
+        {
+            EdgeIdentifier edgeId = {segment.from, segment.to, segment.mode};
+            existingEdges.insert(edgeId);
         }
     }
 
-    // Convert to a deterministically ordered list
-    QList<QPair<QString, QPair<QString, int>>> orderedEdges = keyEdges.values();
-    std::sort(orderedEdges.begin(), orderedEdges.end());
-
-    // Try removing each key edge and find alternative paths
+    // Try to find additional paths by perturbing edge costs
     for (int i = result.size(); i < n; i++)
     {
         bool foundNewPath = false;
 
-        // Try single-edge exclusion
-        for (const auto &edgeTriple : orderedEdges)
+        // Try different multiplier values
+        for (double multiplier = 2.0; multiplier <= 10.0; multiplier += 2.0)
         {
-            QString            from = edgeTriple.first;
-            QString            to   = edgeTriple.second.first;
-            TransportationMode edgeMode =
-                static_cast<TransportationMode>(edgeTriple.second.second);
+            edgeCostMultipliers.clear();
 
-            QSet<EdgeIdentifier> edgesToExclude;
-            EdgeIdentifier       edgeId = {from, to, edgeMode};
-            edgesToExclude.insert(edgeId);
-
-            try
+            // Apply multiplier to different edges
+            for (const EdgeIdentifier &edge : existingEdges)
             {
-                QList<PathSegment> alternativePath =
-                    findShortestPathWithExclusions(
-                        context.startCanonical, context.endCanonical,
-                        context.mode, edgesToExclude);
+                edgeCostMultipliers[edge] = multiplier;
 
-                QString pathSignature = generatePathSignature(alternativePath);
-                if (context.foundPathSignatures.contains(pathSignature))
+                try
                 {
-                    continue; // Skip duplicate path
-                }
+                    QList<PathSegment> alternativePath =
+                        findShortestPathWithPerturbedCosts(
+                            context.startCanonical, context.endCanonical,
+                            context.mode, edgeCostMultipliers);
 
-                // Add new path
-                Path path = buildPathDetails(context, alternativePath,
-                                             result.size() + 1);
-                result.append(path);
-                context.foundPathSignatures.insert(pathSignature);
-                foundNewPath = true;
+                    // Make path signatures more flexible
+                    QString pathSignature =
+                        generatePathSignature(alternativePath);
+                    pathSignature +=
+                        QString(":cost_%1").arg(qRound(multiplier));
 
-                qDebug() << "Found new path by excluding edge" << from << "->"
-                         << to << "with mode" << static_cast<int>(edgeMode);
-
-                // Add any new edges for future exclusion
-                for (const PathSegment &segment : alternativePath)
-                {
-                    QPair<QString, QPair<QString, int>> newEdge = qMakePair(
-                        segment.from,
-                        qMakePair(segment.to, static_cast<int>(segment.mode)));
-
-                    if (!keyEdges.contains(newEdge))
+                    if (context.foundPathSignatures.contains(pathSignature))
                     {
-                        keyEdges.insert(newEdge);
-                        orderedEdges.append(newEdge);
+                        continue; // Skip duplicate
                     }
-                }
 
-                // Resort the edges list
-                std::sort(orderedEdges.begin(), orderedEdges.end());
-                break; // Move to next iteration
-            }
-            catch (const std::exception &)
-            {
-                continue; // Try next edge
-            }
-        }
-
-        // If single-edge exclusion failed, try edge pairs
-        if (!foundNewPath && i < n - 1 && orderedEdges.size() >= 2)
-        {
-            qDebug() << "Trying edge combinations...";
-
-            for (int j = 0; j < orderedEdges.size(); j++)
-            {
-                if (foundNewPath)
+                    // Add new path
+                    Path path = buildPathDetails(context, alternativePath,
+                                                 result.size() + 1);
+                    result.append(path);
+                    context.foundPathSignatures.insert(pathSignature);
+                    foundNewPath = true;
                     break;
-
-                for (int k = j + 1; k < orderedEdges.size(); k++)
+                }
+                catch (const std::exception &)
                 {
-                    auto edge1 = orderedEdges[j];
-                    auto edge2 = orderedEdges[k];
+                    // Reset this edge and try another
+                    edgeCostMultipliers.remove(edge);
+                    continue;
+                }
+            }
 
-                    QSet<EdgeIdentifier> edgesToExclude;
-                    EdgeIdentifier       edgeId1 = {
-                        edge1.first, edge1.second.first,
-                        static_cast<TransportationMode>(edge1.second.second)};
+            if (foundNewPath)
+                break;
 
-                    EdgeIdentifier edgeId2 = {
-                        edge2.first, edge2.second.first,
-                        static_cast<TransportationMode>(edge2.second.second)};
+            // If single edge perturbation didn't work, try edge pairs
+            if (existingEdges.size() >= 2)
+            {
+                QList<EdgeIdentifier> edgesList = existingEdges.values();
 
-                    edgesToExclude.insert(edgeId1);
-                    edgesToExclude.insert(edgeId2);
-
-                    try
+                for (int j = 0; j < edgesList.size() && !foundNewPath; j++)
+                {
+                    for (int k = j + 1; k < edgesList.size() && !foundNewPath;
+                         k++)
                     {
-                        QList<PathSegment> alternativePath =
-                            findShortestPathWithExclusions(
-                                context.startCanonical, context.endCanonical,
-                                context.mode, edgesToExclude);
+                        edgeCostMultipliers.clear();
+                        edgeCostMultipliers[edgesList[j]] = multiplier;
+                        edgeCostMultipliers[edgesList[k]] = multiplier;
 
-                        QString pathSignature =
-                            generatePathSignature(alternativePath);
-                        if (context.foundPathSignatures.contains(pathSignature))
+                        try
                         {
-                            continue; // Skip duplicate path
-                        }
+                            QList<PathSegment> alternativePath =
+                                findShortestPathWithPerturbedCosts(
+                                    context.startCanonical,
+                                    context.endCanonical, context.mode,
+                                    edgeCostMultipliers);
 
-                        Path path = buildPathDetails(context, alternativePath,
+                            QString pathSignature =
+                                generatePathSignature(alternativePath);
+                            pathSignature +=
+                                QString(":pair_%1_%2").arg(j).arg(k);
+
+                            if (!context.foundPathSignatures.contains(
+                                    pathSignature))
+                            {
+                                Path path =
+                                    buildPathDetails(context, alternativePath,
                                                      result.size() + 1);
-                        result.append(path);
-                        context.foundPathSignatures.insert(pathSignature);
-                        foundNewPath = true;
-
-                        qDebug() << "Found new path by excluding edge pair";
-                        break; // Found a new path
-                    }
-                    catch (const std::exception &)
-                    {
-                        continue; // Try next pair
+                                result.append(path);
+                                context.foundPathSignatures.insert(
+                                    pathSignature);
+                                foundNewPath = true;
+                            }
+                        }
+                        catch (const std::exception &)
+                        {
+                            continue;
+                        }
                     }
                 }
             }
         }
 
-        // If we still couldn't find a new path, we're done
         if (!foundNewPath)
-        {
-            qDebug() << "No more unique paths found after trying all exclusion "
-                        "strategies";
             break;
-        }
     }
 }
 
