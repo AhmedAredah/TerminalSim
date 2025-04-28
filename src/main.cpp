@@ -128,15 +128,7 @@ int main(int argc, char *argv[])
     // Initialize server
     TerminalSim::TerminalGraphServer* server = 
         TerminalSim::TerminalGraphServer::getInstance(dataPath);
-    
-    // Load graph if requested
-    if (!loadGraphFile.isEmpty()) {
-        qInfo() << "Loading graph from" << loadGraphFile;
-        if (!server->loadGraph(loadGraphFile)) {
-            qWarning() << "Failed to load graph from" << loadGraphFile;
-        }
-    }
-    
+
     // Connect to RabbitMQ
     if (!server->initialize(rabbitHost, rabbitPort,
                             rabbitUser, rabbitPassword)) {
