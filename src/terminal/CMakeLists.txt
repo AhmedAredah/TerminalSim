@@ -7,16 +7,17 @@ set(TERMINAL_SOURCES
 )
 
 set(TERMINAL_HEADERS
+    terminal_path_segment.h
+    terminal_path.h
     terminal.h
     terminal_graph.h
 )
 
-add_library(terminal_core STATIC ${TERMINAL_SOURCES} ${TERMINAL_HEADERS}
-    terminal_path_segment.h
-    terminal_path.h
-    terminal_graph_impl.h terminal_graph_impl.cpp)
+add_library(terminal_core STATIC ${TERMINAL_SOURCES} ${TERMINAL_HEADERS})
+
 target_link_libraries(terminal_core
     PUBLIC
+    terminal_graph
     terminal_common
     terminal_dwell_time
     Container::Container
