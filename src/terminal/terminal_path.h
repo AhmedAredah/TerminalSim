@@ -4,12 +4,11 @@
 #include <QJsonObject>
 #include <QList>
 #include <QVariantMap>
-
 namespace TerminalSim
 {
 /**
  * @struct Path
- * @brief Represents a complete path in the graph
+ * @brief Represents a complete path with detailed cost breakdowns
  *
  * Contains all segments and cost details for a path
  * between terminals.
@@ -23,10 +22,9 @@ struct Path
     QList<QVariantMap> terminalsInPath;    ///< Terminals in path
     QList<PathSegment> segments;           ///< Path segments
 
-    /**
-     * Converts this Path to a QJsonObject
-     * @return JSON representation of the path
-     */
+    // Detailed cost breakdowns
+    QVariantMap costBreakdown; // Total costs by category
+
     QJsonObject toJson() const
     {
         QJsonObject pathObj;
@@ -48,7 +46,7 @@ struct Path
         }
         pathObj["terminals_in_path"] = terminalsArray;
 
-        // Add segments - now using the PathSegment's toJson method
+        // Add segments
         QJsonArray segmentsArray;
         for (const PathSegment &segment : segments)
         {
@@ -56,8 +54,15 @@ struct Path
         }
         pathObj["segments"] = segmentsArray;
 
+        // Add cost breakdown
+        QJsonObject breakdownObj;
+        for (auto it = costBreakdown.begin(); it != costBreakdown.end(); ++it)
+        {
+            breakdownObj[it.key()] = QJsonValue::fromVariant(it.value());
+        }
+        pathObj["cost_breakdown"] = breakdownObj;
+
         return pathObj;
     }
 };
-
 } // namespace TerminalSim

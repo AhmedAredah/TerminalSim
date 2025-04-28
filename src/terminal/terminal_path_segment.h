@@ -3,15 +3,11 @@
 #include <QJsonObject>
 #include <QString>
 #include <QVariantMap>
-
 namespace TerminalSim
 {
 /**
  * @struct PathSegment
- * @brief Represents a segment in a path
- *
- * Defines a single hop between terminals in a path,
- * including mode and weight.
+ * @brief Represents a segment in a path with enhanced cost metrics
  */
 struct PathSegment
 {
@@ -23,10 +19,10 @@ struct PathSegment
     QString            toTerminalId;   ///< ID of end terminal
     QVariantMap        attributes;     ///< Additional attributes
 
-    /**
-     * Converts this PathSegment to a QJsonObject
-     * @return JSON representation of the segment
-     */
+    // Enhanced cost metrics
+    QVariantMap estimatedValues; // Raw values by transportation mode
+    QVariantMap estimatedCost;   // Computed costs with weights applied
+
     QJsonObject toJson() const
     {
         QJsonObject segmentObj;
@@ -43,7 +39,24 @@ struct PathSegment
         {
             attrsObj[it.key()] = QJsonValue::fromVariant(it.value());
         }
-        segmentObj["attributes"] = attrsObj;
+
+        // Add estimated values
+        QJsonObject valuesObj;
+        for (auto it = estimatedValues.begin(); it != estimatedValues.end();
+             ++it)
+        {
+            valuesObj[it.key()] = QJsonValue::fromVariant(it.value());
+        }
+        attrsObj["estimated_values"] = valuesObj;
+
+        // Add estimated costs
+        QJsonObject costsObj;
+        for (auto it = estimatedCost.begin(); it != estimatedCost.end(); ++it)
+        {
+            costsObj[it.key()] = QJsonValue::fromVariant(it.value());
+        }
+        attrsObj["estimated_cost"] = costsObj;
+        segmentObj["attributes"]   = attrsObj;
 
         return segmentObj;
     }
