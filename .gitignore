@@ -36,3 +36,4 @@ CMakeLists.txt.user
 
 # Build directories
 /build/*
+**.DS_Store
