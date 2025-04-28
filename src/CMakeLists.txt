@@ -1,6 +1,7 @@
 # Add libraries for each component
 add_subdirectory(common)
 add_subdirectory(dwell_time)
+add_subdirectory(graph)
 add_subdirectory(terminal)
 add_subdirectory(server)
 
@@ -11,6 +12,7 @@ add_executable(terminal_simulation main.cpp)
 target_link_libraries(terminal_simulation
     PRIVATE
     terminal_common
+    terminal_graph
     terminal_dwell_time
     terminal_core
     terminal_server
