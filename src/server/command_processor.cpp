@@ -32,12 +32,6 @@ void CommandProcessor::registerCommands()
     registerCommand("ping", [this](const QVariantMap &params) {
         return handlePing(params);
     });
-    registerCommand("serialize_graph", [this](const QVariantMap &params) {
-        return handleSerializeGraph(params);
-    });
-    registerCommand("deserialize_graph", [this](const QVariantMap &params) {
-        return handleDeserializeGraph(params);
-    });
 
     registerCommand("resetServer", [this](const QVariantMap &params) {
         return handleResetServer(params);
@@ -112,55 +106,6 @@ void CommandProcessor::registerCommands()
     registerCommand("add_routes", [this](const QVariantMap &params) {
         return handleAddRoutes(params);
     });
-
-    registerCommand("change_route_weight", [this](const QVariantMap &params) {
-        QString     startTerminal = params.value("start_terminal").toString();
-        QString     endTerminal   = params.value("end_terminal").toString();
-        int         modeInt       = params.value("mode", 0).toInt();
-        QVariantMap newAttributes = params.value("attributes").toMap();
-
-        if (startTerminal.isEmpty() || endTerminal.isEmpty()
-            || newAttributes.isEmpty())
-        {
-            throw std::invalid_argument("Start terminal, end terminal, "
-                                        "and attributes must be provided");
-        }
-
-        TransportationMode mode = static_cast<TransportationMode>(modeInt);
-        m_graph->changeRouteWeight(startTerminal, endTerminal, mode,
-                                   newAttributes);
-        return QVariant(true);
-    });
-
-    // Auto-connection commands
-    registerCommand("connect_terminals_by_interface_modes",
-                    [this](const QVariantMap &) {
-                        m_graph->connectTerminalsByInterfaceModes();
-                        return QVariant(true);
-                    });
-
-    registerCommand("connect_terminals_in_region_by_mode",
-                    [this](const QVariantMap &params) {
-                        QString region = params.value("region").toString();
-
-                        if (region.isEmpty())
-                        {
-                            throw std::invalid_argument(
-                                "Region must be provided");
-                        }
-
-                        m_graph->connectTerminalsInRegionByMode(region);
-                        return QVariant(true);
-                    });
-
-    registerCommand(
-        "connect_regions_by_mode", [this](const QVariantMap &params) {
-            int                modeInt = params.value("mode", 0).toInt();
-            TransportationMode mode = static_cast<TransportationMode>(modeInt);
-
-            m_graph->connectRegionsByMode(mode);
-            return QVariant(true);
-        });
 
     // Path finding commands
     registerCommand("find_shortest_path", [this](const QVariantMap &params) {
@@ -577,38 +522,6 @@ QVariant CommandProcessor::handlePing(const QVariantMap &params)
     return response;
 }
 
-QVariant CommandProcessor::handleSerializeGraph(const QVariantMap &)
-{
-    return m_graph->serializeGraph();
-}
-
-QVariant CommandProcessor::handleDeserializeGraph(const QVariantMap &params)
-{
-    if (!params.contains("graph_data")
-        || !params["graph_data"].canConvert<QVariantMap>())
-    {
-        throw std::invalid_argument("Missing or invalid graph_data parameter");
-    }
-
-    QVariantMap graphData     = params["graph_data"].toMap();
-    QJsonObject jsonGraphData = QJsonObject::fromVariantMap(graphData);
-
-    // Create a new graph from the data
-    TerminalGraph *newGraph = TerminalGraph::deserializeGraph(
-        jsonGraphData, m_graph->getPathToTerminalsDirectory());
-
-    // Store the old graph for deletion
-    TerminalGraph *oldGraph = m_graph;
-
-    // Point to the new graph
-    m_graph = newGraph;
-
-    // Delete the old graph (need to be careful with threading here)
-    QMetaObject::invokeMethod(
-        this, [oldGraph]() { delete oldGraph; }, Qt::QueuedConnection);
-
-    return true;
-}
 
 QVariant CommandProcessor::handleResetServer(const QVariantMap &params)
 {
@@ -690,112 +603,9 @@ CommandProcessor::handleSetCostFunctionParameters(const QVariantMap &params)
 
 QVariant CommandProcessor::handleAddTerminal(const QVariantMap &params)
 {
-    if (!params.contains("terminal_names") || !params.contains("display_name")
-        || !params.contains("custom_config")
-        || !params.contains("terminal_interfaces"))
-    {
-        throw std::invalid_argument("Missing required parameters "
-                                    "for add_terminal");
-    }
-
-    // Extract terminal names
-    QStringList terminalNames;
-    QVariant    terminalNamesVar = params["terminal_names"];
-
-    if (terminalNamesVar.canConvert<QString>())
-    {
-        // Single name
-        terminalNames << terminalNamesVar.toString();
-    }
-    else if (terminalNamesVar.canConvert<QStringList>())
-    {
-        // List of names
-        terminalNames = terminalNamesVar.toStringList();
-    }
-    else
-    {
-        throw std::invalid_argument("terminal_names must be a string or "
-                                    "list of strings");
-    }
-
-    if (terminalNames.isEmpty())
-    {
-        throw std::invalid_argument("At least one terminal name must "
-                                    "be provided");
-    }
-
-    QString terminalDisplayName = params["display_name"].toString();
-
-    // Extract custom config
-    QVariantMap customConfig = params["custom_config"].toMap();
-
-    // Extract terminal interfaces
-    QVariantMap interfacesMap = params["terminal_interfaces"].toMap();
-    QMap<TerminalInterface, QSet<TransportationMode>> terminalInterfaces;
-
-    for (auto it = interfacesMap.constBegin(); it != interfacesMap.constEnd();
-         ++it)
-    {
-        // Convert interface string/int to enum
-        TerminalInterface interface;
-        bool              ok = false;
-
-        int interfaceInt = it.key().toInt(&ok);
-        if (ok)
-        {
-            interface = static_cast<TerminalInterface>(interfaceInt);
-        }
-        else
-        {
-            // Try to convert from string
-            interface = EnumUtils::stringToTerminalInterface(it.key());
-        }
-
-        // Extract supported modes
-        QSet<TransportationMode> modes;
-        QVariantList             modesList = it.value().toList();
-
-        for (const QVariant &modeVar : modesList)
-        {
-            TransportationMode mode;
-
-            if (modeVar.canConvert<int>())
-            {
-                mode = static_cast<TransportationMode>(modeVar.toInt());
-            }
-            else if (modeVar.canConvert<QString>())
-            {
-                mode =
-                    EnumUtils::stringToTransportationMode(modeVar.toString());
-            }
-            else
-            {
-                continue;
-            }
-
-            modes.insert(mode);
-        }
-
-        if (!modes.isEmpty())
-        {
-            terminalInterfaces[interface] = modes;
-        }
-    }
-
-    if (terminalInterfaces.isEmpty())
-    {
-        throw std::invalid_argument("At least one terminal interface with "
-                                    "modes must be provided");
-    }
-
-    // Extract region (optional)
-    QString region = params.value("region").toString();
 
     // Add terminal to graph
-    return m_graph
-        ->addTerminal(terminalNames, terminalDisplayName, customConfig,
-                      terminalInterfaces, region)
-        ->toJson();
+    return m_graph->addTerminal(params)->toJson();
 }
 
 QVariant CommandProcessor::handleAddTerminals(const QVariantMap &params)
@@ -960,21 +770,8 @@ QVariant CommandProcessor::handleFindShortestPath(const QVariantMap &params)
     }
 
     // Find the shortest path
-    QList<PathSegment> pathSegments;
-
-    // Check if we need to restrict by regions
-    if (params.contains("allowed_regions")
-        && params["allowed_regions"].canConvert<QStringList>())
-    {
-        QStringList allowedRegions = params["allowed_regions"].toStringList();
-        pathSegments               = m_graph->findShortestPathWithinRegions(
-            startTerminal, endTerminal, allowedRegions, mode);
-    }
-    else
-    {
-        pathSegments =
-            m_graph->findShortestPath(startTerminal, endTerminal, mode);
-    }
+    QList<PathSegment> pathSegments =
+        m_graph->findShortestPath(startTerminal, endTerminal, mode);
 
     // Convert path segments to JSON array using the toJson() method
     QJsonArray pathArray;
