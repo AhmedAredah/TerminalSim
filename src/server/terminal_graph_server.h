@@ -57,34 +57,7 @@ public:
      * @return True if connected
      */
     bool isConnected() const;
-    
-    /**
-     * @brief Serialize the current graph
-     * @return JSON object with serialized graph
-     */
-    QJsonObject serializeGraph() const;
-    
-    /**
-     * @brief Replace current graph with deserialized version
-     * @param graphData JSON object with serialized graph
-     * @return True if successful
-     */
-    bool deserializeGraph(const QJsonObject& graphData);
-    
-    /**
-     * @brief Save graph to file
-     * @param filepath Path to save file
-     * @return True if successful
-     */
-    bool saveGraph(const QString& filepath) const;
-    
-    /**
-     * @brief Load graph from file
-     * @param filepath Path to load file
-     * @return True if successful
-     */
-    bool loadGraph(const QString& filepath);
-    
+
     /**
      * @brief Process a command directly (for testing)
      * @param command Command to process
