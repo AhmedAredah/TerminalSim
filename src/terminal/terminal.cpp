@@ -244,6 +244,14 @@ Terminal::estimateContainerCost(const ContainerCore::Container *container,
     return totalCost;
 }
 
+double Terminal::estimateTotalCostByWeights(
+    double delayConst, double costWeight,
+    const ContainerCore::Container *container) const
+{
+    return estimateContainerHandlingTime() * delayConst
+           + estimateContainerCost(container) * costWeight;
+}
+
 bool Terminal::canAcceptTransport(TransportationMode mode,
                                   TerminalInterface side) const
 {

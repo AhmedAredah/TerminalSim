@@ -62,6 +62,9 @@ public:
     double
     estimateContainerCost(const ContainerCore::Container *container = nullptr,
                           bool applyCustoms = false) const;
+    double
+         estimateTotalCostByWeights(double delayConst, double costWeight,
+                                    const ContainerCore::Container *container) const;
     bool canAcceptTransport(TransportationMode mode,
                             TerminalInterface  side) const;
 
