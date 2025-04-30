@@ -9,8 +9,9 @@ namespace TerminalSim
  * @struct PathSegment
  * @brief Represents a segment in a path with enhanced cost metrics
  */
-struct PathSegment
+class PathSegment
 {
+public:
     QString            from;           ///< Starting terminal name
     QString            to;             ///< Ending terminal name
     TransportationMode mode;           ///< Mode of transport
@@ -22,6 +23,27 @@ struct PathSegment
     // Enhanced cost metrics
     QVariantMap estimatedValues; // Raw values by transportation mode
     QVariantMap estimatedCost;   // Computed costs with weights applied
+
+    struct CostDetails
+    {
+        double      totalCost = 0.0;
+        QVariantMap estimatedValues;
+        QVariantMap costMap;
+    };
+
+    CostDetails estimateTotalCostByWeights(const QHash<QString, double> weights)
+    {
+        CostDetails costDetails;
+        for (auto it = attributes.begin(); it != attributes.end(); ++it)
+        {
+            QString key = it.key();
+            costDetails.estimatedValues.insert(key, it.value());
+            double result = it.value().toDouble() * weights.value(key, 0.0);
+            costDetails.costMap.insert(key, result);
+            costDetails.totalCost += result;
+        }
+        return costDetails;
+    }
 
     QJsonObject toJson() const
     {
