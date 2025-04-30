@@ -306,7 +306,7 @@ QVariant CommandProcessor::processCommand(const QString     &command,
 {
     QMutexLocker locker(&m_mutex);
 
-    qDebug() << "Processing command:" << command << "with params:" << params;
+    qDebug() << "Processing command:" << command;
 
     // Check if command exists
     if (!m_commandHandlers.contains(command))
