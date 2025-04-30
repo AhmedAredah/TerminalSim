@@ -824,7 +824,9 @@ double TerminalGraph::computeCost(const QVariantMap &params,
     return cost;
 }
 
-void TerminalGraph::buildPathSegment(PathSegment &segment, const QString &from,
+void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
+                                     bool isEnd, bool skipStartTerminal,
+                                     bool skipEndTerminal, const QString &from,
                                      const QString &to, TransportationMode mode,
                                      const QVariantMap &attributes) const
 {
@@ -869,40 +871,86 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, const QString &from,
     }
 
     // Compute total cost
-    segment.weight = computeCost(params, costFunctionWeights, mode);
+    double totalWeight = 0.0;
+    // segment.weight =
+    //     computeCost(params, costFunctionWeights, mode);
 
     // Calculate detailed cost breakdown
-    segment.estimatedCost["carbonEmissions"] =
+    double carbonEmissions =
         computeCost({{"carbonEmissions", params["carbonEmissions"]}},
                     costFunctionWeights, mode);
+    segment.estimatedCost["carbonEmissions"] = carbonEmissions;
+    totalWeight += carbonEmissions;
 
-    segment.estimatedCost["cost"] =
+    double directCost =
         computeCost({{"cost", params["cost"]}}, costFunctionWeights, mode);
+    segment.estimatedCost["cost"] = directCost;
+    totalWeight += directCost;
 
-    segment.estimatedCost["distance"] = computeCost(
-        {{"distance", params["distance"]}}, costFunctionWeights, mode);
+    double distance = computeCost({{"distance", params["distance"]}},
+                                  costFunctionWeights, mode);
+    segment.estimatedCost["distance"] = distance;
+    totalWeight += distance;
 
-    segment.estimatedCost["energyConsumption"] =
+    double energyConsumption =
         computeCost({{"energyConsumption", params["energyConsumption"]}},
                     costFunctionWeights, mode);
+    segment.estimatedCost["energyConsumption"] = energyConsumption;
+    totalWeight += energyConsumption;
 
-    segment.estimatedCost["risk"] =
+    double risk =
         computeCost({{"risk", params["risk"]}}, costFunctionWeights, mode);
+    segment.estimatedCost["risk"] = risk;
+    totalWeight += risk;
 
-    segment.estimatedCost["travelTime"] = computeCost(
-        {{"travelTime", params["travelTime"]}}, costFunctionWeights, mode);
+    double travelTime = computeCost({{"travelTime", params["travelTime"]}},
+                                    costFunctionWeights, mode);
+    segment.estimatedCost["travelTime"] = travelTime;
+    totalWeight += travelTime;
 
-    segment.estimatedCost["previousTerminalDelay"] = computeCost(
-        {{"terminal_delay", fromHandlingTime}}, costFunctionWeights, mode);
+    double previousTerminalDelay = 0.0;
+    if (!skipStartTerminal)
+    {
+        previousTerminalDelay = computeCost(
+            {{"terminal_delay", fromHandlingTime}}, costFunctionWeights, mode);
+    }
+    previousTerminalDelay =
+        isStart ? previousTerminalDelay : previousTerminalDelay / 2;
+    totalWeight += previousTerminalDelay;
+    segment.estimatedCost["previousTerminalDelay"] = previousTerminalDelay;
 
-    segment.estimatedCost["previousTerminalCost"] =
-        computeCost({{"terminal_cost", fromCost}}, costFunctionWeights, mode);
+    double previousTerminalCost = 0.0;
+    if (!skipStartTerminal)
+    {
+        previousTerminalCost = computeCost({{"terminal_cost", fromCost}},
+                                           costFunctionWeights, mode);
+    }
+    previousTerminalCost =
+        isStart ? previousTerminalCost : previousTerminalCost / 2;
+    segment.estimatedCost["previousTerminalCost"] = previousTerminalCost;
+    totalWeight += previousTerminalCost;
 
-    segment.estimatedCost["nextTerminalDelay"] = computeCost(
-        {{"terminal_delay", toHandlingTime}}, costFunctionWeights, mode);
+    double nextTerminalDelay = 0.0;
+    if (!skipEndTerminal)
+    {
+        nextTerminalDelay = computeCost({{"terminal_delay", toHandlingTime}},
+                                        costFunctionWeights, mode);
+    }
+    nextTerminalDelay = isEnd ? nextTerminalDelay : nextTerminalDelay / 2;
+    segment.estimatedCost["nextTerminalDelay"] = nextTerminalDelay;
+    totalWeight += nextTerminalDelay;
 
-    segment.estimatedCost["nextTerminalCost"] =
-        computeCost({{"terminal_cost", toCost}}, costFunctionWeights, mode);
+    double nextTerminalCost = 0.0;
+    if (!skipEndTerminal)
+    {
+        nextTerminalCost =
+            computeCost({{"terminal_cost", toCost}}, costFunctionWeights, mode);
+    }
+    nextTerminalCost = isEnd ? nextTerminalCost : nextTerminalCost / 2;
+    segment.estimatedCost["nextTerminalCost"] = nextTerminalCost;
+    totalWeight += nextTerminalCost;
+
+    segment.weight = totalWeight;
 }
 
 void TerminalGraph::updateGraph(TransportationMode requestedMode)
@@ -1047,6 +1095,22 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
         QString     toName   = edge.target();
         TransportationMode mode     = edge.mode();
 
+        bool skipNextTerminalCost     = false;
+        bool skipPreviousTerminalCost = false;
+
+        if (i < edges.size() - 1)
+        {
+            const auto        &nextEdge = edges[i + 1];
+            TransportationMode nextMode = nextEdge.mode();
+            skipNextTerminalCost        = (mode == nextMode);
+        }
+        if (i > 0)
+        {
+            const auto        &prevEdge = edges[i + 1];
+            TransportationMode prevMode = prevEdge.mode();
+            skipPreviousTerminalCost    = (mode == prevMode);
+        }
+
         // Find the edge data
         EdgeIdentifier edgeKey(fromName, toName, mode);
 
@@ -1080,9 +1144,20 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
             continue;
         }
 
+        bool isStart = (i == 0);
+        bool isEnd   = (i == edges.size() - 1);
+        if (isStart)
+        {
+            skipPreviousTerminalCost = true;
+        }
+        if (isEnd)
+        {
+            skipNextTerminalCost = true;
+        }
         // Create path segment
         PathSegment segment;
-        buildPathSegment(segment, fromName, toName, edgeData.mode,
+        buildPathSegment(segment, isStart, isEnd, skipPreviousTerminalCost,
+                         skipNextTerminalCost, fromName, toName, edgeData.mode,
                          edgeData.attributes);
         path.segments.append(segment);
 
@@ -1135,7 +1210,7 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
     }
 
     path.terminalsInPath = terminalsInPath;
-    path.totalPathCost   = path.totalEdgeCosts + path.totalTerminalCosts;
+    path.totalPathCost   = path.totalEdgeCosts; // + path.totalTerminalCosts;
 
     return path;
 }

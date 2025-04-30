@@ -172,8 +172,10 @@ private:
     void updateGraph(TransportationMode mode);
 
     // Build a path segment with detailed costs
-    void buildPathSegment(PathSegment &segment, const QString &from,
-                          const QString &to, TransportationMode mode,
+    void buildPathSegment(PathSegment &segment, bool isStart, bool isEnd,
+                          bool skipStartTerminal, bool skipEndTerminal,
+                          const QString &from, const QString &to,
+                          TransportationMode mode,
                           const QVariantMap &attributes) const;
 
     QPair<QString, QString> addRouteInternal(const QString     &id,
