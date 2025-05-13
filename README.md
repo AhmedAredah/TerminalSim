@@ -1,6 +1,41 @@
-# TerminalSim
+<h1 align="center">
+  <a href="https://github.com/VTTI-CSM/TerminalSim">
+    <img src="https://github.com/user-attachments/assets/40967d47-1d00-4eea-b590-b395b9cb25e0" alt="TerminalSim" width="200px"/>
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+  </a>
+  <br/>
+  TerminalSim [Terminal Simulator]
+</h1>
+
+<p align="center">
+<!--   <a href="http://dx.doi.org/10.1109/SM63044.2024.10733439">
+    <img src="https://zenodo.org/badge/DOI/10.1109/SM63044.2024.10733439.svg" alt="DOI">
+  </a> -->
+  <a href="https://www.gnu.org/licenses/gpl-3.0">
+    <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GNU GPL v3">
+  </a>
+  <a href="https://github.com/VTTI-CSM/TerminalSim/releases">
+    <img alt="GitHub tag (latest by date)" src="https://img.shields.io/github/v/tag/VTTI-CSM/TerminalSim.svg?label=latest">
+  </a>
+  <img alt="GitHub All Releases" src="https://img.shields.io/github/downloads/VTTI-CSM/TerminalSim/total.svg">
+  <a href="">
+    <img src="https://img.shields.io/badge/CLA-CLA%20Required-red" alt="CLA Required">
+    <a href="https://cla-assistant.io/VTTI-CSM/TerminalSim"><img src="https://cla-assistant.io/readme/badge/VTTI-CSM/TerminalSim" alt="CLA assistant" /></a>
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/VTTI-CSM/TerminalSim/releases" target="_blank">Download TerminalSim</a> |
+  <a href="https://VTTI-CSM.github.io/TerminalSim/" target="_blank">Documentation</a>
+</p>
+
+<p align="center">
+  <a> For questions or feedback, contact <a href='mailto:AhmedAredah@vt.edu'>Ahmed Aredah</a> or <a href='mailto:HRakha@vtti.vt.edu'>Prof. Hesham Rakha<a>
+</p>
+
+<p align="center">
+  <strong>TerminalSim is a server-side tool without a GUI, designed to operate in conjunction with <a href="https://github.com/VTTI-CSM/CargoNetSim" target="_blank">CargoNetSim</a>.</strong>
+</p>
 
 ## Overview
 
