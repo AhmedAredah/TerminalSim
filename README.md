@@ -20,7 +20,7 @@
   <img alt="GitHub All Releases" src="https://img.shields.io/github/downloads/VTTI-CSM/TerminalSim/total.svg">
   <a href="">
     <img src="https://img.shields.io/badge/CLA-CLA%20Required-red" alt="CLA Required">
-    <a href="https://cla-assistant.io/VTTI-CSM/TerminalSim"><img src="https://cla-assistant.io/readme/badge/VTTI-CSM/TerminalSim" alt="CLA assistant" /></a>
+    <a href="https://cla-assistant.io/AhmedAredah/TerminalSim"><img src="https://cla-assistant.io/readme/badge/AhmedAredah/TerminalSim" alt="CLA assistant" /></a>
   </a>
 </p>
 
