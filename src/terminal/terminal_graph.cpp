@@ -1291,7 +1291,7 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
         m_graph, startCanonical, endCanonical, n, mode);
 
     // Convert paths to TerminalSim Paths
-    QList<Path> result;
+    QVector<Path> result;
     QSet<QString> uniquePathSignatures;
 
     for (size_t i = 0; i < kPaths.size(); ++i)
@@ -1316,9 +1316,19 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
         }
     }
 
+    // Resort and reassign path IDs
+    std::sort(result.begin(), result.end(), [](const Path &a, const Path &b) {
+        return a.totalPathCost < b.totalPathCost;
+    });
+
+    for (int i = 0; i < result.size(); i++)
+    {
+        result[i].pathId = i + 1;
+    }
+
     qDebug() << "Found" << result.size() << "paths from" << startCanonical
              << "to" << endCanonical;
-    return result;
+    return result.toList();
 }
 
 QString TerminalGraph::getCanonicalName(const QString &name) const
