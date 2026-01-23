@@ -107,6 +107,10 @@ public:
     static Terminal *fromJson(const QJsonObject &json,
                               const QString &pathToTerminalFolder = QString());
 
+    // Utility for parsing mode-network aliases from config
+    static QMap<QPair<TransportationMode, QString>, QString>
+    parseModeNetworkAliases(const QVariantMap &aliasesMap);
+
 private:
     // Terminal properties
     QString                                           m_terminalName;

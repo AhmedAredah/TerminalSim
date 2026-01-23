@@ -173,10 +173,13 @@ Terminal *TerminalGraph::addTerminalInternal(const QVariantMap &terminalData)
         }
     }
 
+    // Parse mode network aliases from custom config
+    auto modeNetworkAliases = Terminal::parseModeNetworkAliases(
+        customConfig.value("mode_network_aliases").toMap());
+
     // Create terminal
     Terminal *term = new Terminal(
-        canonical, displayName, interfaces,
-        QMap<QPair<TransportationMode, QString>, QString>(),
+        canonical, displayName, interfaces, modeNetworkAliases,
         customConfig.value("capacity").toMap(),
         customConfig.value("dwell_time").toMap(),
         customConfig.value("customs").toMap(),

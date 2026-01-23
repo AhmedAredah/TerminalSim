@@ -773,23 +773,8 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     QMap<QPair<TransportationMode, QString>, QString> modeNetworkAliases;
     if (json.contains("mode_network_aliases") &&
         json["mode_network_aliases"].isObject()) {
-        QJsonObject aliasesJson = json["mode_network_aliases"].toObject();
-        for (auto it = aliasesJson.constBegin();
-             it != aliasesJson.constEnd(); ++it) {
-            QString key = it.key();
-            QStringList parts = key.split(':');
-            if (parts.size() != 2) continue;
-            
-            bool ok;
-            int modeInt = parts[0].toInt(&ok);
-            if (!ok) continue;
-            
-            TransportationMode mode = static_cast<TransportationMode>(modeInt);
-            QString network = parts[1];
-            QString alias = it.value().toString();
-            
-            modeNetworkAliases[qMakePair(mode, network)] = alias;
-        }
+        modeNetworkAliases = parseModeNetworkAliases(
+            json["mode_network_aliases"].toObject().toVariantMap());
     }
     
     // Extract capacity
@@ -877,6 +862,30 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
                      capacity, dwellTime, customs, cost, pathToTerminalFolder);
 
     return terminal;
+}
+
+QMap<QPair<TransportationMode, QString>, QString>
+Terminal::parseModeNetworkAliases(const QVariantMap &aliasesMap)
+{
+    QMap<QPair<TransportationMode, QString>, QString> result;
+    for (auto it = aliasesMap.constBegin(); it != aliasesMap.constEnd(); ++it)
+    {
+        QStringList parts = it.key().split(':');
+        if (parts.size() != 2)
+            continue;
+
+        bool ok;
+        int  modeInt = parts[0].toInt(&ok);
+        if (!ok)
+            continue;
+
+        TransportationMode mode    = static_cast<TransportationMode>(modeInt);
+        QString            network = parts[1];
+        QString            alias   = it.value().toString();
+
+        result[qMakePair(mode, network)] = alias;
+    }
+    return result;
 }
 
 } // namespace TerminalSim
