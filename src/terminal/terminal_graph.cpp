@@ -183,7 +183,9 @@ Terminal *TerminalGraph::addTerminalInternal(const QVariantMap &terminalData)
         customConfig.value("capacity").toMap(),
         customConfig.value("dwell_time").toMap(),
         customConfig.value("customs").toMap(),
-        customConfig.value("cost").toMap(), m_pathToTerminalsDirectory);
+        customConfig.value("cost").toMap(),
+        customConfig.value("system_dynamics").toMap(),
+        m_pathToTerminalsDirectory);
 
     // Add vertex to graph
     m_graph.addVertex(canonical);

@@ -23,6 +23,7 @@ Terminal::Terminal(
     const QMap<QPair<TransportationMode, QString>, QString> &modeNetworkAliases,
     const QVariantMap &capacity, const QVariantMap &dwellTime,
     const QVariantMap &customs, const QVariantMap &cost,
+    const QVariantMap &systemDynamics,
     const QString &pathToTerminalFolder)
     : QObject(nullptr)
     , m_terminalName(terminalName)
@@ -39,6 +40,8 @@ Terminal::Terminal(
     , m_riskFactor(0.0)
     , m_storage(nullptr)
     , m_folderPath(pathToTerminalFolder)
+    , m_sdParams()
+    , m_sdState()
 {
     // Process capacity parameters
     if (!capacity.isEmpty()) {
@@ -91,7 +94,31 @@ Terminal::Terminal(
         m_customsCost = cost.value("customs_fees", 0.0).toDouble();
         m_riskFactor = cost.value("risk_factor", 0.0).toDouble();
     }
-    
+
+    // Process system dynamics parameters (disabled by default)
+    if (!systemDynamics.isEmpty()) {
+        m_sdParams.enabled = systemDynamics.value("enabled", false).toBool();
+        m_sdParams.criticalUtilization =
+            systemDynamics.value("critical_utilization", 0.7).toDouble();
+        m_sdParams.congestionExponent =
+            systemDynamics.value("congestion_exponent", 2.0).toDouble();
+        m_sdParams.congestionSensitivity =
+            systemDynamics.value("congestion_sensitivity", 1.0).toDouble();
+        m_sdParams.delaySensitivity =
+            systemDynamics.value("delay_sensitivity", 0.5).toDouble();
+        m_sdParams.maxServiceRate =
+            systemDynamics.value("max_service_rate", 100.0).toDouble();
+
+        // Initialize SD state if enabled
+        if (m_sdParams.enabled) {
+            m_sdState.serviceCapacity = m_sdParams.maxServiceRate;
+            m_sdState.delayMultiplier = 1.0;
+            qDebug() << "System dynamics enabled for terminal" << m_terminalName
+                     << "with critical utilization:" << m_sdParams.criticalUtilization
+                     << "max service rate:" << m_sdParams.maxServiceRate;
+        }
+    }
+
     // Initialize storage
     if (m_folderPath.isEmpty() || !QDir(m_folderPath).exists()) {
         m_storage = new ContainerCore::ContainerMap();
@@ -327,23 +354,40 @@ void Terminal::addContainer(const ContainerCore::Container& container,
                 baseDeparture +=
                     customsDelay * 3600.0; // Convert hours to seconds
                 customsApplied = true;
-                
+
                 qDebug() << "Container"
                          << containerCopy->getContainerID()
                          << "selected for customs inspection. Delay:"
                          << customsDelay << "hours";
             }
         }
+
+        // 3. Apply System Dynamics delay multiplier (static, at insertion)
+        if (m_sdParams.enabled && m_sdState.delayMultiplier > 1.0) {
+            double baseDwell = baseDeparture - baseAddingTime;
+            double adjustedDwell = baseDwell * m_sdState.delayMultiplier;
+            baseDeparture = baseAddingTime + adjustedDwell;
+
+            qDebug() << "SD delay multiplier applied to container"
+                     << containerCopy->getContainerID()
+                     << ": M_k=" << m_sdState.delayMultiplier
+                     << "dwell adjusted from" << baseDwell << "to" << adjustedDwell;
+        }
     }
-    
-    // 3. Calculate total cost for the container
+
+    // Track arrival for System Dynamics
+    if (m_sdParams.enabled) {
+        m_sdState.arrivalsThisStep++;
+    }
+
+    // 5. Calculate total cost for the container
     double containerCost =
         estimateContainerCost(containerCopy, customsApplied);
     QVariant costSoFar =
         containerCopy->getCustomVariable(
             ContainerCore::Container::HaulerType::noHauler,
             "cost");
-    
+
     double totalCost = containerCost;
     if (costSoFar.isValid() && !costSoFar.toString().isEmpty()) {
         bool ok;
@@ -352,13 +396,13 @@ void Terminal::addContainer(const ContainerCore::Container& container,
             totalCost += previousCost;
         }
     }
-    
+
     containerCopy->addCustomVariable(
         ContainerCore::Container::HaulerType::noHauler,
         "cost",
         totalCost);
-    
-    // 4. Accumulate total time for the container
+
+    // 6. Accumulate total time for the container
     QVariant timeSoFar =
         containerCopy->getCustomVariable(
             ContainerCore::Container::HaulerType::noHauler,
@@ -377,11 +421,11 @@ void Terminal::addContainer(const ContainerCore::Container& container,
         ContainerCore::Container::HaulerType::noHauler,
         "time",
         totalTime);
-    
-    // 5. Set container location
+
+    // 7. Set container location
     containerCopy->setContainerCurrentLocation(m_terminalName);
-    
-    // 6. Add to storage
+
+    // 8. Add to storage
     m_storage->addContainer(containerCopy->getContainerID(),
                             containerCopy, baseAddingTime, baseDeparture);
     
@@ -574,21 +618,61 @@ QJsonArray
 Terminal::dequeueContainersByNextDestination(const QString& destination)
 {
     QMutexLocker locker(&m_mutex);
-    
+
     // Get and remove containers from storage based on next destination
     QVector<ContainerCore::Container *> containers =
         m_storage->dequeueContainersByNextDestination(destination);
-    
+
+    int requestedCount = containers.size();
+    int servedCount = requestedCount;
+
+    // Apply System Dynamics service capacity limit
+    if (m_sdParams.enabled && requestedCount > 0) {
+        int remainingCapacity = static_cast<int>(
+            m_sdState.serviceCapacity * m_sdState.deltaT) - m_sdState.departuresThisStep;
+
+        if (remainingCapacity <= 0) {
+            // No capacity remaining - re-add all containers and return empty
+            for (ContainerCore::Container* container : containers) {
+                m_storage->addContainer(
+                    container->getContainerID(), container,
+                    0.0, 0.0); // Re-add with original times (will be overwritten)
+            }
+            qWarning() << "SD: Service capacity exhausted at terminal" << m_terminalName
+                       << "- cannot serve" << requestedCount << "containers";
+            return QJsonArray();
+        }
+
+        if (requestedCount > remainingCapacity) {
+            // Partial service - re-add excess containers
+            servedCount = remainingCapacity;
+            for (int i = servedCount; i < requestedCount; ++i) {
+                ContainerCore::Container* container = containers[i];
+                m_storage->addContainer(
+                    container->getContainerID(), container,
+                    0.0, 0.0);
+            }
+            containers.resize(servedCount);
+
+            qDebug() << "SD: Service capacity limited departure at terminal"
+                     << m_terminalName << "- served" << servedCount
+                     << "of" << requestedCount << "requested";
+        }
+
+        // Track departures for SD
+        m_sdState.departuresThisStep += servedCount;
+    }
+
     // Convert to JSON array
     QJsonArray result;
     for (const ContainerCore::Container* container : containers) {
         result.append(container->toJson());
     }
-    
+
     qDebug() << "Removed" << result.size()
              << "containers with next destination" << destination
              << "from terminal" << m_terminalName;
-    
+
     return result;
 }
 
@@ -724,6 +808,26 @@ QJsonObject Terminal::toJson() const
         }
     }
 
+    // System Dynamics configuration and state
+    QJsonObject sdJson;
+    sdJson["enabled"] = m_sdParams.enabled;
+    sdJson["critical_utilization"] = m_sdParams.criticalUtilization;
+    sdJson["congestion_exponent"] = m_sdParams.congestionExponent;
+    sdJson["congestion_sensitivity"] = m_sdParams.congestionSensitivity;
+    sdJson["delay_sensitivity"] = m_sdParams.delaySensitivity;
+    sdJson["max_service_rate"] = m_sdParams.maxServiceRate;
+    json["system_dynamics"] = sdJson;
+
+    // Include current SD state if enabled
+    if (m_sdParams.enabled) {
+        QJsonObject sdStateJson;
+        sdStateJson["utilization"] = m_sdState.utilization;
+        sdStateJson["congestion"] = m_sdState.congestion;
+        sdStateJson["service_capacity"] = m_sdState.serviceCapacity;
+        sdStateJson["delay_multiplier"] = m_sdState.delayMultiplier;
+        json["system_dynamics_state"] = sdStateJson;
+    }
+
     return json;
 }
 
@@ -842,24 +946,32 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     QVariantMap cost;
     if (json.contains("cost") && json["cost"].isObject()) {
         QJsonObject costJson = json["cost"].toObject();
-        
+
         if (costJson.contains("fixed_fees")) {
             cost["fixed_fees"] = costJson["fixed_fees"].toDouble();
         }
-        
+
         if (costJson.contains("customs_fees")) {
             cost["customs_fees"] = costJson["customs_fees"].toDouble();
         }
-        
+
         if (costJson.contains("risk_factor")) {
             cost["risk_factor"] = costJson["risk_factor"].toDouble();
         }
     }
-    
+
+    // Extract system dynamics
+    QVariantMap systemDynamics;
+    if (json.contains("system_dynamics") && json["system_dynamics"].isObject()) {
+        QJsonObject sdJson = json["system_dynamics"].toObject();
+        systemDynamics = sdJson.toVariantMap();
+    }
+
     // Create terminal
     Terminal *terminal =
         new Terminal(terminalName, displayName, interfaces, modeNetworkAliases,
-                     capacity, dwellTime, customs, cost, pathToTerminalFolder);
+                     capacity, dwellTime, customs, cost, systemDynamics,
+                     pathToTerminalFolder);
 
     return terminal;
 }
@@ -886,6 +998,132 @@ Terminal::parseModeNetworkAliases(const QVariantMap &aliasesMap)
         result[qMakePair(mode, network)] = alias;
     }
     return result;
+}
+
+// ============================================================================
+// System Dynamics Implementation
+// ============================================================================
+
+double Terminal::calculateCongestion(double utilization) const
+{
+    // Equation 4: G_k(t) = clamp(((U_k - U_crit) / (1 - U_crit))^γ, 0, 1)
+    if (utilization <= m_sdParams.criticalUtilization)
+    {
+        return 0.0;
+    }
+
+    double normalized = (utilization - m_sdParams.criticalUtilization) /
+                        (1.0 - m_sdParams.criticalUtilization);
+    double congestion = std::pow(normalized, m_sdParams.congestionExponent);
+    return std::min(1.0, congestion);
+}
+
+double Terminal::calculateServiceCapacity(double congestion) const
+{
+    // Equation 5: S_k^cap = S_max / (1 + β * G_k)
+    return m_sdParams.maxServiceRate /
+           (1.0 + m_sdParams.congestionSensitivity * congestion);
+}
+
+double Terminal::calculateDelayMultiplier(double congestion) const
+{
+    // Equation 8: M_k = 1 + δ * G_k
+    return 1.0 + m_sdParams.delaySensitivity * congestion;
+}
+
+void Terminal::updateSystemDynamics(double currentTime, double deltaT)
+{
+    QMutexLocker locker(&m_mutex);
+
+    if (!m_sdParams.enabled)
+    {
+        return;
+    }
+
+    // Store time step for service capacity calculations
+    m_sdState.deltaT = deltaT;
+    m_sdState.lastUpdateTime = currentTime;
+
+    // Calculate utilization: U_k = I_k / Cap_k
+    int containerCount = m_storage ? m_storage->size() : 0;
+    if (m_maxCapacity > 0 && m_maxCapacity != std::numeric_limits<int>::max())
+    {
+        m_sdState.utilization =
+            static_cast<double>(containerCount) / static_cast<double>(m_maxCapacity);
+    }
+    else
+    {
+        // Unlimited capacity means no congestion from utilization
+        m_sdState.utilization = 0.0;
+    }
+
+    // Calculate congestion G_k(t)
+    m_sdState.congestion = calculateCongestion(m_sdState.utilization);
+
+    // Calculate service capacity S_k^cap(t)
+    m_sdState.serviceCapacity = calculateServiceCapacity(m_sdState.congestion);
+
+    // Calculate delay multiplier M_k(t)
+    m_sdState.delayMultiplier = calculateDelayMultiplier(m_sdState.congestion);
+
+    // Reset per-step counters for the new time step
+    m_sdState.arrivalsThisStep = 0;
+    m_sdState.departuresThisStep = 0;
+
+    qDebug() << "SD update for" << m_terminalName << "at t=" << currentTime
+             << ": U=" << m_sdState.utilization << "G=" << m_sdState.congestion
+             << "S_cap=" << m_sdState.serviceCapacity
+             << "M=" << m_sdState.delayMultiplier;
+}
+
+QJsonObject Terminal::getSystemDynamicsState() const
+{
+    QMutexLocker locker(&m_mutex);
+
+    QJsonObject state;
+
+    // Parameters
+    QJsonObject params;
+    params["enabled"] = m_sdParams.enabled;
+    params["critical_utilization"] = m_sdParams.criticalUtilization;
+    params["congestion_exponent"] = m_sdParams.congestionExponent;
+    params["congestion_sensitivity"] = m_sdParams.congestionSensitivity;
+    params["delay_sensitivity"] = m_sdParams.delaySensitivity;
+    params["max_service_rate"] = m_sdParams.maxServiceRate;
+    state["parameters"] = params;
+
+    // Current state
+    QJsonObject currentState;
+    currentState["utilization"] = m_sdState.utilization;
+    currentState["congestion"] = m_sdState.congestion;
+    currentState["service_capacity"] = m_sdState.serviceCapacity;
+    currentState["delay_multiplier"] = m_sdState.delayMultiplier;
+    currentState["arrivals_this_step"] = m_sdState.arrivalsThisStep;
+    currentState["departures_this_step"] = m_sdState.departuresThisStep;
+    currentState["last_update_time"] = m_sdState.lastUpdateTime;
+    currentState["delta_t"] = m_sdState.deltaT;
+    state["state"] = currentState;
+
+    // Derived values
+    state["remaining_service_capacity"] = getRemainingServiceCapacity();
+    state["container_count"] = m_storage ? m_storage->size() : 0;
+    state["max_capacity"] = m_maxCapacity;
+
+    return state;
+}
+
+int Terminal::getRemainingServiceCapacity() const
+{
+    if (!m_sdParams.enabled)
+    {
+        return std::numeric_limits<int>::max(); // Unlimited if SD disabled
+    }
+
+    // Remaining capacity = S_cap * deltaT - departuresThisStep
+    int totalCapacityThisStep =
+        static_cast<int>(m_sdState.serviceCapacity * m_sdState.deltaT);
+    int remaining = totalCapacityThisStep - m_sdState.departuresThisStep;
+    return std::max(0, remaining);
 }
 
 } // namespace TerminalSim

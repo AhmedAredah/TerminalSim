@@ -18,6 +18,40 @@ namespace TerminalSim
 {
 
 /**
+ * @brief System Dynamics parameters for terminal congestion modeling
+ *
+ * These parameters control the stock-flow dynamics of terminal operations,
+ * including congestion effects and throughput degradation.
+ */
+struct SystemDynamicsParams
+{
+    bool   enabled              = false; ///< Whether SD is active for this terminal
+    double criticalUtilization  = 0.7;   ///< U_k^crit: threshold for congestion activation
+    double congestionExponent   = 2.0;   ///< γ: nonlinearity of congestion function
+    double congestionSensitivity = 1.0;  ///< β_k: service capacity degradation rate
+    double delaySensitivity     = 0.5;   ///< δ_k: delay multiplier sensitivity
+    double maxServiceRate       = 100.0; ///< S_max,k: max service rate (TEU/hour)
+};
+
+/**
+ * @brief System Dynamics state variables for a terminal
+ *
+ * These variables are updated each simulation time step and represent
+ * the current congestion and throughput state of the terminal.
+ */
+struct SystemDynamicsState
+{
+    double utilization       = 0.0; ///< U_k: current utilization (I_k / Cap_k)
+    double congestion        = 0.0; ///< G_k: congestion level [0, 1]
+    double serviceCapacity   = 0.0; ///< S_k^cap: congestion-limited service rate (TEU/hour)
+    double delayMultiplier   = 1.0; ///< M_k: dwell time multiplier
+    int    arrivalsThisStep  = 0;   ///< N_k^arr: arrivals in current time step
+    int    departuresThisStep = 0;  ///< N_k^srv: departures in current time step
+    double lastUpdateTime    = 0.0; ///< Last SD update timestamp
+    double deltaT            = 1.0; ///< Current time step duration (hours)
+};
+
+/**
  * @brief Terminal class representing a container
  *        terminal with various operations
  */
@@ -29,12 +63,14 @@ public:
     /**
      * @brief Constructs a terminal with configuration
      * @param terminalName Unique identifier for the terminal
+     * @param displayName Human-readable name for the terminal
      * @param interfaces Map of supported interfaces and transportation modes
      * @param modeNetworkAliases Aliases for mode-network combinations
      * @param capacity Capacity configuration
      * @param dwellTime Dwell time configuration
      * @param customs Customs operations configuration
      * @param cost Cost configuration
+     * @param systemDynamics System dynamics configuration (optional)
      * @param pathToTerminalFolder Directory for persistent storage
      */
     Terminal(
@@ -44,6 +80,7 @@ public:
                           &modeNetworkAliases = {},
         const QVariantMap &capacity = {}, const QVariantMap &dwellTime = {},
         const QVariantMap &customs = {}, const QVariantMap &cost = {},
+        const QVariantMap &systemDynamics = {},
         const QString &pathToTerminalFolder = QString());
 
     ~Terminal();
@@ -111,6 +148,54 @@ public:
     static QMap<QPair<TransportationMode, QString>, QString>
     parseModeNetworkAliases(const QVariantMap &aliasesMap);
 
+    // System Dynamics methods
+    /**
+     * @brief Update system dynamics state for the current time step
+     * @param currentTime Current simulation time (hours)
+     * @param deltaT Time step duration (hours)
+     *
+     * Recalculates utilization, congestion, service capacity, and delay
+     * multiplier based on current inventory. Should be called once per
+     * simulation time step.
+     */
+    void updateSystemDynamics(double currentTime, double deltaT);
+
+    /**
+     * @brief Get current system dynamics state as JSON
+     * @return JSON object containing all SD state variables and parameters
+     */
+    QJsonObject getSystemDynamicsState() const;
+
+    /**
+     * @brief Check if system dynamics is enabled for this terminal
+     * @return true if SD is enabled
+     */
+    bool isSystemDynamicsEnabled() const { return m_sdParams.enabled; }
+
+    /**
+     * @brief Get current delay multiplier M_k(t)
+     * @return Delay multiplier (>= 1.0)
+     */
+    double getDelayMultiplier() const { return m_sdState.delayMultiplier; }
+
+    /**
+     * @brief Get current congestion level G_k(t)
+     * @return Congestion level [0, 1]
+     */
+    double getCongestionLevel() const { return m_sdState.congestion; }
+
+    /**
+     * @brief Get current service capacity S_k^cap(t)
+     * @return Service capacity in TEU/hour
+     */
+    double getServiceCapacity() const { return m_sdState.serviceCapacity; }
+
+    /**
+     * @brief Get remaining service capacity for current time step
+     * @return Remaining capacity in TEU (S_cap * deltaT - departuresThisStep)
+     */
+    int getRemainingServiceCapacity() const;
+
 private:
     // Terminal properties
     QString                                           m_terminalName;
@@ -141,8 +226,17 @@ private:
     QString                      m_folderPath;
     QString                      m_sqlFile;
 
+    // System Dynamics
+    SystemDynamicsParams m_sdParams;
+    SystemDynamicsState  m_sdState;
+
     // Thread safety
     mutable QMutex m_mutex;
+
+    // Private SD helper methods
+    double calculateCongestion(double utilization) const;
+    double calculateServiceCapacity(double congestion) const;
+    double calculateDelayMultiplier(double congestion) const;
 };
 
 } // namespace TerminalSim

@@ -292,6 +292,35 @@ void CommandProcessor::registerCommands()
         terminal->clear();
         return QVariant(true);
     });
+
+    // System Dynamics commands
+    registerCommand("update_system_dynamics", [this](const QVariantMap &params) {
+        QString terminalId = params.value("terminal_id").toString();
+        double  currentTime = params.value("current_time", 0.0).toDouble();
+        double  deltaT = params.value("delta_t", 1.0).toDouble();
+
+        if (terminalId.isEmpty())
+        {
+            throw std::invalid_argument("Terminal ID must be provided");
+        }
+
+        Terminal *terminal = getTerminalFromParams(params);
+        terminal->updateSystemDynamics(currentTime, deltaT);
+
+        return terminal->getSystemDynamicsState();
+    });
+
+    registerCommand("get_system_dynamics_state", [this](const QVariantMap &params) {
+        QString terminalId = params.value("terminal_id").toString();
+
+        if (terminalId.isEmpty())
+        {
+            throw std::invalid_argument("Terminal ID must be provided");
+        }
+
+        Terminal *terminal = getTerminalFromParams(params);
+        return terminal->getSystemDynamicsState();
+    });
 }
 
 void CommandProcessor::registerCommand(const QString &command,
@@ -480,6 +509,11 @@ QString CommandProcessor::determineEventName(const QString &command)
     else if (command == "set_cost_function_parameters")
     {
         return "costFunctionUpdated";
+    }
+    else if (command == "update_system_dynamics"
+             || command == "get_system_dynamics_state")
+    {
+        return "systemDynamicsUpdated";
     }
     else
     {
