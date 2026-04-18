@@ -945,12 +945,15 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     QString terminalName = json["terminal_name"].toString();
     QString displayName  = json["display_name"].toString();
 
-    // Extract interfaces
+    // Extract interfaces — accept both "interfaces" (canonical) and
+    // "terminal_interfaces" (CargoNetSim wire key) for compatibility.
     QMap<TerminalInterface,
          QSet<TransportationMode>> interfaces;
-    if (json.contains("interfaces") &&
-        json["interfaces"].isObject()) {
-        QJsonObject interfacesJson = json["interfaces"].toObject();
+    const QJsonValue ifaceVal = json.contains("interfaces")
+        ? json.value("interfaces")
+        : json.value("terminal_interfaces");
+    if (ifaceVal.isObject()) {
+        QJsonObject interfacesJson = ifaceVal.toObject();
         for (auto it = interfacesJson.constBegin();
              it != interfacesJson.constEnd(); ++it) {
             bool ok;
