@@ -975,18 +975,25 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
         }
     }
     
+    // Use custom_config wrapper if present (CargoNetSim sends nested format);
+    // fall back to flat top-level for backward compat with other senders.
+    const QJsonObject cfg = (json.contains("custom_config")
+                             && json["custom_config"].isObject())
+        ? json["custom_config"].toObject()
+        : json;
+
     // Extract mode network aliases
     QMap<QPair<TransportationMode, QString>, QString> modeNetworkAliases;
-    if (json.contains("mode_network_aliases") &&
-        json["mode_network_aliases"].isObject()) {
+    if (cfg.contains("mode_network_aliases") &&
+        cfg["mode_network_aliases"].isObject()) {
         modeNetworkAliases = parseModeNetworkAliases(
-            json["mode_network_aliases"].toObject().toVariantMap());
+            cfg["mode_network_aliases"].toObject().toVariantMap());
     }
-    
+
     // Extract capacity
     QVariantMap capacity;
-    if (json.contains("capacity") && json["capacity"].isObject()) {
-        QJsonObject capacityJson = json["capacity"].toObject();
+    if (cfg.contains("capacity") && cfg["capacity"].isObject()) {
+        QJsonObject capacityJson = cfg["capacity"].toObject();
         
         if (!capacityJson["max_capacity"].isNull()) {
             capacity["max_capacity"] = capacityJson["max_capacity"].toInt();
@@ -1000,8 +1007,8 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     
     // Extract dwell time
     QVariantMap dwellTime;
-    if (json.contains("dwell_time") && json["dwell_time"].isObject()) {
-        QJsonObject dwellTimeJson = json["dwell_time"].toObject();
+    if (cfg.contains("dwell_time") && cfg["dwell_time"].isObject()) {
+        QJsonObject dwellTimeJson = cfg["dwell_time"].toObject();
         
         if (dwellTimeJson.contains("method") &&
             dwellTimeJson["method"].isString()) {
@@ -1025,8 +1032,8 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     
     // Extract customs
     QVariantMap customs;
-    if (json.contains("customs") && json["customs"].isObject()) {
-        QJsonObject customsJson = json["customs"].toObject();
+    if (cfg.contains("customs") && cfg["customs"].isObject()) {
+        QJsonObject customsJson = cfg["customs"].toObject();
         
         if (customsJson.contains("probability")) {
             customs["probability"] =
@@ -1046,8 +1053,8 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     
     // Extract cost
     QVariantMap cost;
-    if (json.contains("cost") && json["cost"].isObject()) {
-        QJsonObject costJson = json["cost"].toObject();
+    if (cfg.contains("cost") && cfg["cost"].isObject()) {
+        QJsonObject costJson = cfg["cost"].toObject();
 
         if (costJson.contains("fixed_fees")) {
             cost["fixed_fees"] = costJson["fixed_fees"].toDouble();
@@ -1064,8 +1071,8 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
 
     // Extract system dynamics
     QVariantMap systemDynamics;
-    if (json.contains("system_dynamics") && json["system_dynamics"].isObject()) {
-        QJsonObject sdJson = json["system_dynamics"].toObject();
+    if (cfg.contains("system_dynamics") && cfg["system_dynamics"].isObject()) {
+        QJsonObject sdJson = cfg["system_dynamics"].toObject();
         systemDynamics = sdJson.toVariantMap();
 
         if (systemDynamics.contains("mode_delay_params")) {
