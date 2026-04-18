@@ -55,9 +55,9 @@ struct SystemDynamicsParams
     ModeDelayParams trainDelay {0.8, 3.0};  ///< Train: batch/scheduled, steepest
 
     // Arrival-side base penalty times (seconds) at full congestion (U_k = 1.0)
-    double shipArrivalPenalty  = 14400.0;  ///< 4 hours: berth waiting at anchorage
-    double truckArrivalPenalty = 1800.0;   ///< 0.5 hours: gate-in queue processing
-    double trainArrivalPenalty = 7200.0;   ///< 2 hours: rail unloading queue
+    double shipArrivalPenalty  = 14400.0;  ///< Ship arrival penalty (seconds). 4 hours of berth waiting at anchorage.
+    double truckArrivalPenalty =  1800.0;  ///< Truck arrival penalty (seconds). 0.5 hours of gate-in queue.
+    double trainArrivalPenalty =  7200.0;  ///< Train arrival penalty (seconds). 2 hours of rail unloading.
 };
 
 /**
@@ -74,8 +74,8 @@ struct SystemDynamicsState
     double delayMultiplier   = 1.0; ///< M_k: dwell time multiplier
     int    arrivalsThisStep  = 0;   ///< N_k^arr: arrivals in current time step
     int    departuresThisStep = 0;  ///< N_k^srv: departures in current time step
-    double lastUpdateTime    = 0.0; ///< Last SD update timestamp
-    double deltaT            = 1.0; ///< Current time step duration (hours)
+    double lastUpdateTime    = 0.0;    ///< Last SD update timestamp (seconds). Same scale as currentTime parameter.
+    double deltaT            = 3600.0; ///< Current time step duration (seconds). Default 3600.0 = 1 hour.
 };
 
 /**
@@ -122,6 +122,10 @@ public:
     QPair<bool, QString> checkCapacityStatus(int additionalContainers) const;
 
     // Container handling
+    /**
+     * @brief Expected per-container handling time at this terminal.
+     * @return Expected handling time (hours). This is a user-facing helper; internal state is in seconds.
+     */
     double estimateContainerHandlingTime() const;
     double
     estimateContainerCost(const ContainerCore::Container *container = nullptr,
@@ -181,8 +185,8 @@ public:
     // System Dynamics methods
     /**
      * @brief Update system dynamics state for the current time step
-     * @param currentTime Current simulation time (hours)
-     * @param deltaT Time step duration (hours)
+     * @param currentTime Current simulation time (seconds)
+     * @param deltaT Time step duration (seconds)
      *
      * Recalculates utilization, congestion, service capacity, and delay
      * multiplier based on current inventory. Should be called once per
@@ -250,8 +254,8 @@ private:
 
     // Customs parameters
     double m_customsProbability;
-    double m_customsDelayMean;
-    double m_customsDelayVariance;
+    double m_customsDelayMean;      ///< Mean customs inspection delay (seconds).
+    double m_customsDelayVariance;  ///< Variance of customs inspection delay (seconds²).
 
     // Cost parameters
     double m_fixedCost;
