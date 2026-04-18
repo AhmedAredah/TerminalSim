@@ -349,7 +349,7 @@ void CommandProcessor::registerCommands()
     registerCommand("update_system_dynamics", [this](const QVariantMap &params) {
         QString terminalId = params.value("terminal_id").toString();
         double  currentTime = params.value("current_time", 0.0).toDouble();
-        double  deltaT = params.value("delta_t", 1.0).toDouble();
+        double  deltaT = params.value("delta_t", 3600.0).toDouble();  // seconds; 3600 = 1 hour
 
         if (terminalId.isEmpty())
         {
@@ -376,7 +376,7 @@ void CommandProcessor::registerCommands()
 
     registerCommand("update_all_terminals_sd", [this](const QVariantMap &params) {
         double currentTime = params.value("current_time", 0.0).toDouble();
-        double deltaT = params.value("delta_t", 1.0).toDouble();
+        double deltaT = params.value("delta_t", 3600.0).toDouble();  // seconds; 3600 = 1 hour
 
         QJsonArray results;
         QStringList terminalNames = m_graph->getAllTerminalNames(false).keys();

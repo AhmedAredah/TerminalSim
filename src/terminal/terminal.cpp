@@ -704,8 +704,7 @@ Terminal::dequeueContainersByNextDestination(const QString& destination)
 
     // Apply System Dynamics service capacity limit
     if (m_sdParams.enabled && requestedCount > 0) {
-        int remainingCapacity = static_cast<int>(
-            m_sdState.serviceCapacity * m_sdState.deltaT) - m_sdState.departuresThisStep;
+        int remainingCapacity = capacityThisStep() - m_sdState.departuresThisStep;
 
         if (remainingCapacity <= 0) {
             // No capacity remaining - re-add all containers and return empty
@@ -1354,11 +1353,18 @@ int Terminal::getRemainingServiceCapacity() const
         return std::numeric_limits<int>::max(); // Unlimited if SD disabled
     }
 
-    // Remaining capacity = S_cap * deltaT - departuresThisStep
-    int totalCapacityThisStep =
-        static_cast<int>(m_sdState.serviceCapacity * m_sdState.deltaT);
+    // Remaining capacity = capacityThisStep - departuresThisStep
+    int totalCapacityThisStep = capacityThisStep();
     int remaining = totalCapacityThisStep - m_sdState.departuresThisStep;
     return std::max(0, remaining);
+}
+
+int Terminal::capacityThisStep() const
+{
+    // Caller must hold m_mutex (or be on a read-only path).
+    // serviceCapacity is TEU/hour; deltaT is seconds.
+    return static_cast<int>(m_sdState.serviceCapacity
+                            * (m_sdState.deltaT / 3600.0));
 }
 
 } // namespace TerminalSim

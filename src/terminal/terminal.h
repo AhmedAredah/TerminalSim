@@ -236,7 +236,8 @@ public:
 
     /**
      * @brief Get remaining service capacity for current time step
-     * @return Remaining capacity in TEU (S_cap * deltaT - departuresThisStep)
+     * @return Remaining capacity in TEU (capacityThisStep - departuresThisStep).
+     *         See capacityThisStep() for the S_cap·deltaT bridging (TEU/hour × seconds).
      */
     int getRemainingServiceCapacity() const;
 
@@ -282,6 +283,14 @@ private:
     double estimateContainerCostInternal(
         const ContainerCore::Container *container = nullptr,
         bool applyCustoms = false) const;
+
+    /**
+     * @brief Per-step service capacity in TEU.
+     * @return `serviceCapacity × deltaT` converted to TEU. `serviceCapacity` is
+     *         TEU/hour; `deltaT` is seconds (see 2026-04-17 unification).
+     *         The /3600.0 bridge lives here so callers need not repeat it.
+     */
+    int capacityThisStep() const;
 
     // Private SD helper methods
     double calculateCongestion(double utilization) const;
