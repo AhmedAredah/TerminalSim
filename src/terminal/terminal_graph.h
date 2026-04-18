@@ -140,8 +140,8 @@ private:
     };
     struct TerminalDetails
     {
-        double handlingTime;
-        double handlingCost;
+        double handlingTime;  ///< Seconds. Mirrors Terminal::estimateContainerHandlingTime().
+        double handlingCost;  ///< USD per container. Mirrors Terminal::estimateContainerCost().
     };
 
     QHash<EdgeIdentifier, QList<EdgeData>> m_edgeData;

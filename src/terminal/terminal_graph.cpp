@@ -474,8 +474,8 @@ TerminalGraph::addRouteInternal(const QString &id, const QString &start,
 
     // Prepare parameters for cost function
     QVariantMap params       = routeAttrs;
-    params["terminal_delay"] = delay;
-    params["terminal_cost"]  = terminalCost;
+    params["terminal_delay"] = delay;           // seconds; sum of both endpoints' handlingTime
+    params["terminal_cost"]  = terminalCost;    // USD per container
 
     // Compute total cost
     double cost = computeCost(params, m_costFunctionParametersWeights, mode);
