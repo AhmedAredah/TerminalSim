@@ -78,7 +78,9 @@ Terminal::Terminal(
         m_dwellTimeParameters = cleanParams;
     }
     
-    // Process customs parameters
+    // Process customs parameters (all time fields in seconds;
+    // variance in seconds²). Historical schema used hours; see
+    // 2026-04-17 time-unit unification.
     if (!customs.isEmpty()) {
         m_customsProbability =
             customs.value("probability", 0.0).toDouble();
@@ -260,25 +262,24 @@ Terminal::checkCapacityStatus(int additionalContainers) const
 double Terminal::estimateContainerHandlingTime() const
 {
     QMutexLocker locker(&m_mutex);
-    
-    double totalHours = 0.0;
-    
-    // 1. Dwell Time (Storage Duration)
+
+    double totalSeconds = 0.0;
+
+    // 1. Dwell Time (Storage Duration) — already in seconds.
     if (!m_dwellTimeParameters.isEmpty()) {
-        double dwellMeanHours = ContainerDwellTime::getDepartureTime(
-                                    0.0, m_dwellTimeMethod.isEmpty() ?
-                                        "gamma" : m_dwellTimeMethod,
-                                    m_dwellTimeParameters) /
-                                3600.0; // Convert seconds to hours
-        totalHours += dwellMeanHours;
+        totalSeconds += ContainerDwellTime::getDepartureTime(
+                            0.0,
+                            m_dwellTimeMethod.isEmpty() ?
+                                "gamma" : m_dwellTimeMethod,
+                            m_dwellTimeParameters);
     }
-    
-    // 2. Customs Inspection (Expected)
+
+    // 2. Customs Inspection (Expected) — delay_mean is seconds.
     if (m_customsProbability > 0.0 && m_customsDelayMean > 0.0) {
-        totalHours += m_customsProbability * m_customsDelayMean;
+        totalSeconds += m_customsProbability * m_customsDelayMean;
     }
-    
-    return totalHours;
+
+    return totalSeconds;
 }
 
 double
@@ -422,14 +423,13 @@ void Terminal::addContainer(const ContainerCore::Container& container,
                     customsDelay = qMax(0.0, normalDist(generator));
                 }
 
-                baseDeparture +=
-                    customsDelay * 3600.0; // Convert hours to seconds
+                baseDeparture += customsDelay; // customsDelay is already seconds
                 customsApplied = true;
 
                 qDebug() << "Container"
                          << containerCopy->getContainerID()
                          << "selected for customs inspection. Delay:"
-                         << customsDelay << "hours (not congestion-scaled)";
+                         << customsDelay << "seconds (not congestion-scaled)";
             }
         }
 

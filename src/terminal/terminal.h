@@ -124,7 +124,10 @@ public:
     // Container handling
     /**
      * @brief Expected per-container handling time at this terminal.
-     * @return Expected handling time (hours). This is a user-facing helper; internal state is in seconds.
+     * @return Expected handling time (seconds). Sums the dwell-time distribution
+     *         mean and the expected customs delay (probability × delay_mean).
+     *         Callers that weight this by a cost coefficient must scale their
+     *         weights to account for seconds rather than hours.
      */
     double estimateContainerHandlingTime() const;
     double
