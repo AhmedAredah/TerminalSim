@@ -1302,9 +1302,9 @@ QJsonObject Terminal::getSystemDynamicsState() const
 
     // Arrival penalty parameters
     QJsonObject arrivalPenalties;
-    arrivalPenalties["ship_seconds"] = m_sdParams.shipArrivalPenalty;
-    arrivalPenalties["truck_seconds"] = m_sdParams.truckArrivalPenalty;
-    arrivalPenalties["train_seconds"] = m_sdParams.trainArrivalPenalty;
+    arrivalPenalties["ship"] = m_sdParams.shipArrivalPenalty;
+    arrivalPenalties["truck"] = m_sdParams.truckArrivalPenalty;
+    arrivalPenalties["train"] = m_sdParams.trainArrivalPenalty;
     params["arrival_penalties"] = arrivalPenalties;
 
     state["parameters"] = params;
