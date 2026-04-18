@@ -18,6 +18,23 @@ namespace TerminalSim
 {
 
 /**
+ * @brief Per-mode delay parameters for BPR-style volume-delay function
+ *
+ * Each transportation mode experiences terminal congestion differently:
+ * - Ships (M/D/c queueing): moderate α, quadratic β
+ * - Trucks (M/Ek/c queueing): lowest α, steeper β (many servers, short service)
+ * - Trains (batch/scheduled): highest α, steepest β (cascading conflicts)
+ *
+ * Formula: M_k(t, mode) = 1 + α · (U_k / U_crit)^β   when U_k > U_crit
+ *          M_k(t, mode) = 1.0                            otherwise
+ */
+struct ModeDelayParams
+{
+    double alpha = 0.5;  ///< Delay scaling coefficient
+    double beta  = 2.0;  ///< Delay nonlinearity exponent
+};
+
+/**
  * @brief System Dynamics parameters for terminal congestion modeling
  *
  * These parameters control the stock-flow dynamics of terminal operations,
@@ -31,6 +48,16 @@ struct SystemDynamicsParams
     double congestionSensitivity = 1.0;  ///< β_k: service capacity degradation rate
     double delaySensitivity     = 0.5;   ///< δ_k: delay multiplier sensitivity
     double maxServiceRate       = 100.0; ///< S_max,k: max service rate (TEU/hour)
+
+    // Mode-specific delay parameters (BPR-style volume-delay)
+    ModeDelayParams shipDelay  {0.5, 2.0};  ///< Ship: M/D/c queueing behavior
+    ModeDelayParams truckDelay {0.3, 2.5};  ///< Truck: M/Ek/c, lower & smoother
+    ModeDelayParams trainDelay {0.8, 3.0};  ///< Train: batch/scheduled, steepest
+
+    // Arrival-side base penalty times (seconds) at full congestion (U_k = 1.0)
+    double shipArrivalPenalty  = 14400.0;  ///< 4 hours: berth waiting at anchorage
+    double truckArrivalPenalty = 1800.0;   ///< 0.5 hours: gate-in queue processing
+    double trainArrivalPenalty = 7200.0;   ///< 2 hours: rail unloading queue
 };
 
 /**
@@ -107,11 +134,14 @@ public:
 
     // Container operations
     void addContainer(const ContainerCore::Container &container,
-                      double                          addingTime = -1);
+                      double                          addingTime = -1,
+                      TransportationMode              arrivalMode = TransportationMode::Any);
     void addContainers(const QList<ContainerCore::Container> &containers,
-                       double                                 addingTime = -1);
+                       double                                 addingTime = -1,
+                       TransportationMode arrivalMode = TransportationMode::Any);
     void addContainersFromJson(const QJsonObject &containers,
-                               double             addingTime = -1);
+                               double             addingTime = -1,
+                               TransportationMode arrivalMode = TransportationMode::Any);
 
     // Container queries
     QJsonArray
@@ -179,6 +209,13 @@ public:
     double getDelayMultiplier() const { return m_sdState.delayMultiplier; }
 
     /**
+     * @brief Get mode-specific delay multiplier M_k(t, mode)
+     * @param mode Transportation mode (Ship, Truck, Train)
+     * @return Mode-specific delay multiplier (>= 1.0)
+     */
+    double getDelayMultiplier(TransportationMode mode) const;
+
+    /**
      * @brief Get current congestion level G_k(t)
      * @return Congestion level [0, 1]
      */
@@ -233,10 +270,19 @@ private:
     // Thread safety
     mutable QMutex m_mutex;
 
+    // Lock-free helpers (caller must hold m_mutex)
+    QPair<bool, QString> checkCapacityStatusInternal(int additionalContainers) const;
+    double estimateContainerCostInternal(
+        const ContainerCore::Container *container = nullptr,
+        bool applyCustoms = false) const;
+
     // Private SD helper methods
     double calculateCongestion(double utilization) const;
     double calculateServiceCapacity(double congestion) const;
-    double calculateDelayMultiplier(double congestion) const;
+    double calculateDelayMultiplier(double utilization,
+                                    TransportationMode mode = TransportationMode::Any) const;
+    double calculateArrivalPenalty(double utilization,
+                                   TransportationMode mode) const;
 };
 
 } // namespace TerminalSim

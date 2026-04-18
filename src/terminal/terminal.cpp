@@ -109,6 +109,46 @@ Terminal::Terminal(
         m_sdParams.maxServiceRate =
             systemDynamics.value("max_service_rate", 100.0).toDouble();
 
+        // Parse mode-specific delay parameters
+        if (systemDynamics.contains("ship_delay_alpha")) {
+            m_sdParams.shipDelay.alpha =
+                systemDynamics.value("ship_delay_alpha").toDouble();
+        }
+        if (systemDynamics.contains("ship_delay_beta")) {
+            m_sdParams.shipDelay.beta =
+                systemDynamics.value("ship_delay_beta").toDouble();
+        }
+        if (systemDynamics.contains("truck_delay_alpha")) {
+            m_sdParams.truckDelay.alpha =
+                systemDynamics.value("truck_delay_alpha").toDouble();
+        }
+        if (systemDynamics.contains("truck_delay_beta")) {
+            m_sdParams.truckDelay.beta =
+                systemDynamics.value("truck_delay_beta").toDouble();
+        }
+        if (systemDynamics.contains("train_delay_alpha")) {
+            m_sdParams.trainDelay.alpha =
+                systemDynamics.value("train_delay_alpha").toDouble();
+        }
+        if (systemDynamics.contains("train_delay_beta")) {
+            m_sdParams.trainDelay.beta =
+                systemDynamics.value("train_delay_beta").toDouble();
+        }
+
+        // Parse arrival-side penalty parameters (seconds at full congestion)
+        if (systemDynamics.contains("ship_arrival_penalty")) {
+            m_sdParams.shipArrivalPenalty =
+                systemDynamics.value("ship_arrival_penalty").toDouble();
+        }
+        if (systemDynamics.contains("truck_arrival_penalty")) {
+            m_sdParams.truckArrivalPenalty =
+                systemDynamics.value("truck_arrival_penalty").toDouble();
+        }
+        if (systemDynamics.contains("train_arrival_penalty")) {
+            m_sdParams.trainArrivalPenalty =
+                systemDynamics.value("train_arrival_penalty").toDouble();
+        }
+
         // Initialize SD state if enabled
         if (m_sdParams.enabled) {
             m_sdState.serviceCapacity = m_sdParams.maxServiceRate;
@@ -166,30 +206,29 @@ void Terminal::addAliasForModeNetwork(TransportationMode mode,
 }
 
 QPair<bool, QString>
-Terminal::checkCapacityStatus(int additionalContainers) const
+Terminal::checkCapacityStatusInternal(int additionalContainers) const
 {
-    QMutexLocker locker(&m_mutex);
-    
-    int currentCount = getContainerCount();
+    // Caller must hold m_mutex
+    int currentCount = m_storage->size();
     int newCount = currentCount + additionalContainers;
-    
+
     // If unlimited capacity
     if (m_maxCapacity == std::numeric_limits<int>::max()) {
         return qMakePair(true, QString("OK"));
     }
-    
+
     // Check if exceeds max capacity
     if (newCount > m_maxCapacity) {
         return qMakePair(false,
                          QString("Exceeds max capacity of %1")
                              .arg(m_maxCapacity));
     }
-    
+
     // If no critical threshold is set
     if (m_criticalThreshold < 0.0) {
         return qMakePair(true, QString("OK"));
     }
-    
+
     // Check against critical threshold
     double criticalLimit = m_maxCapacity * m_criticalThreshold;
     if (newCount > criticalLimit) {
@@ -198,7 +237,7 @@ Terminal::checkCapacityStatus(int additionalContainers) const
                              .arg(m_criticalThreshold * 100)
                              .arg(m_maxCapacity));
     }
-    
+
     // Check against warning threshold (90% of critical threshold)
     double warningLimit = criticalLimit * 0.9;
     if (newCount > warningLimit) {
@@ -207,8 +246,15 @@ Terminal::checkCapacityStatus(int additionalContainers) const
                                  "capacity (%1/%2)")
                              .arg(newCount).arg(qRound(criticalLimit)));
     }
-    
+
     return qMakePair(true, QString("OK"));
+}
+
+QPair<bool, QString>
+Terminal::checkCapacityStatus(int additionalContainers) const
+{
+    QMutexLocker locker(&m_mutex);
+    return checkCapacityStatusInternal(additionalContainers);
 }
 
 double Terminal::estimateContainerHandlingTime() const
@@ -236,29 +282,29 @@ double Terminal::estimateContainerHandlingTime() const
 }
 
 double
-Terminal::estimateContainerCost(const ContainerCore::Container *container,
-                                bool applyCustoms) const
+Terminal::estimateContainerCostInternal(
+    const ContainerCore::Container *container,
+    bool applyCustoms) const
 {
-    QMutexLocker locker(&m_mutex);
-    
+    // Caller must hold m_mutex
     double totalCost = 0.0;
-    
+
     // Add fixed cost if applicable
     if (m_fixedCost > 0.0) {
         totalCost += m_fixedCost;
     }
-    
+
     // Add customs cost if applicable
     if (applyCustoms && m_customsCost > 0.0) {
         totalCost += m_customsCost;
     }
-    
+
     // Apply risk factor based on container value if applicable
     if (container != nullptr && m_riskFactor > 0.0) {
         QVariant dollarValue = container->getCustomVariable(
             ContainerCore::Container::Container::HaulerType::noHauler,
             "dollar_value");
-        
+
         if (dollarValue.isValid() && !dollarValue.toString().isEmpty()) {
             bool ok;
             double value = dollarValue.toDouble(&ok);
@@ -267,8 +313,16 @@ Terminal::estimateContainerCost(const ContainerCore::Container *container,
             }
         }
     }
-    
+
     return totalCost;
+}
+
+double
+Terminal::estimateContainerCost(const ContainerCore::Container *container,
+                                bool applyCustoms) const
+{
+    QMutexLocker locker(&m_mutex);
+    return estimateContainerCostInternal(container, applyCustoms);
 }
 
 double Terminal::estimateTotalCostByWeights(
@@ -293,12 +347,13 @@ bool Terminal::canAcceptTransport(TransportationMode mode,
 }
 
 void Terminal::addContainer(const ContainerCore::Container& container,
-                            double addingTime)
+                            double addingTime,
+                            TransportationMode arrivalMode)
 {
     QMutexLocker locker(&m_mutex);
-    
-    // Check capacity
-    QPair<bool, QString> capacityStatus = checkCapacityStatus(1);
+
+    // Check capacity (use internal variant — we already hold m_mutex)
+    QPair<bool, QString> capacityStatus = checkCapacityStatusInternal(1);
     if (!capacityStatus.first) {
         qWarning() << "Cannot add container to terminal"
                    << m_terminalName
@@ -306,12 +361,12 @@ void Terminal::addContainer(const ContainerCore::Container& container,
         throw std::runtime_error(QString("Cannot add container: %1")
                                      .arg(capacityStatus.second).toStdString());
     }
-    
+
     if (capacityStatus.second.startsWith("Warning")) {
         qWarning() << "Terminal" << m_terminalName
                    << ":" << capacityStatus.second;
     }
-    
+
     // Create a copy of the container to modify
     ContainerCore::Container* containerCopy = container.copy();
     
@@ -321,16 +376,38 @@ void Terminal::addContainer(const ContainerCore::Container& container,
     bool customsApplied = false;
     
     if (addingTime >= 0) {
-        // 1. Predict dwell time based on method and parameters
+        // === STEP 1: Yard dwell time (congestion-scaled) ===
+        double yardDwell = 0.0;
         if (!m_dwellTimeMethod.isEmpty() && !m_dwellTimeParameters.isEmpty()) {
-            baseDeparture = ContainerDwellTime::getDepartureTime(
+            double rawDeparture = ContainerDwellTime::getDepartureTime(
                 baseAddingTime,
                 m_dwellTimeMethod,
                 m_dwellTimeParameters
                 );
+            yardDwell = rawDeparture - baseAddingTime;
         }
-        
-        // 2. Apply customs delay if applicable based on probability
+
+        // Apply mode-specific congestion multiplier to yard dwell ONLY
+        if (m_sdParams.enabled) {
+            double yardMultiplier = calculateDelayMultiplier(
+                m_sdState.utilization, arrivalMode);
+            if (yardMultiplier > 1.0) {
+                double originalDwell = yardDwell;
+                yardDwell *= yardMultiplier;
+
+                qDebug() << "Yard dwell congestion applied to container"
+                         << containerCopy->getContainerID()
+                         << ": mode="
+                         << EnumUtils::transportationModeToString(arrivalMode)
+                         << "M_k=" << yardMultiplier
+                         << "yard dwell adjusted from" << originalDwell
+                         << "to" << yardDwell;
+            }
+        }
+
+        baseDeparture = baseAddingTime + yardDwell;
+
+        // === STEP 2: Customs delay (independent of congestion) ===
         if (m_customsProbability > 0.0 && m_customsDelayMean > 0.0) {
             if (QRandomGenerator::global()->generateDouble() <
                 m_customsProbability) {
@@ -338,16 +415,10 @@ void Terminal::addContainer(const ContainerCore::Container& container,
                                     std::sqrt(m_customsDelayVariance) : 1.0;
                 double customsDelay = 0.0;
                 {
-                    // Create a normal distribution with the given
-                    // mean and standard deviation
                     std::normal_distribution<double>
                         normalDist(m_customsDelayMean, stdDev);
-
-                    // Use Qt's random generator to get a seed value
                     std::mt19937
                         generator(QRandomGenerator::global()->generate());
-
-                    // Generate a random value from the normal distribution
                     customsDelay = qMax(0.0, normalDist(generator));
                 }
 
@@ -358,20 +429,23 @@ void Terminal::addContainer(const ContainerCore::Container& container,
                 qDebug() << "Container"
                          << containerCopy->getContainerID()
                          << "selected for customs inspection. Delay:"
-                         << customsDelay << "hours";
+                         << customsDelay << "hours (not congestion-scaled)";
             }
         }
 
-        // 3. Apply System Dynamics delay multiplier (static, at insertion)
-        if (m_sdParams.enabled && m_sdState.delayMultiplier > 1.0) {
-            double baseDwell = baseDeparture - baseAddingTime;
-            double adjustedDwell = baseDwell * m_sdState.delayMultiplier;
-            baseDeparture = baseAddingTime + adjustedDwell;
+        // === STEP 3: Arrival-side mode-specific penalty ===
+        if (m_sdParams.enabled && m_sdState.utilization > m_sdParams.criticalUtilization) {
+            double arrivalPenalty = calculateArrivalPenalty(
+                m_sdState.utilization, arrivalMode);
+            if (arrivalPenalty > 0.0) {
+                baseDeparture += arrivalPenalty;
 
-            qDebug() << "SD delay multiplier applied to container"
-                     << containerCopy->getContainerID()
-                     << ": M_k=" << m_sdState.delayMultiplier
-                     << "dwell adjusted from" << baseDwell << "to" << adjustedDwell;
+                qDebug() << "Arrival-side penalty applied to container"
+                         << containerCopy->getContainerID()
+                         << ": mode="
+                         << EnumUtils::transportationModeToString(arrivalMode)
+                         << "penalty=" << arrivalPenalty / 3600.0 << "hours";
+            }
         }
     }
 
@@ -380,9 +454,9 @@ void Terminal::addContainer(const ContainerCore::Container& container,
         m_sdState.arrivalsThisStep++;
     }
 
-    // 5. Calculate total cost for the container
+    // 5. Calculate total cost for the container (internal — we hold m_mutex)
     double containerCost =
-        estimateContainerCost(containerCopy, customsApplied);
+        estimateContainerCostInternal(containerCopy, customsApplied);
     QVariant costSoFar =
         containerCopy->getCustomVariable(
             ContainerCore::Container::HaulerType::noHauler,
@@ -437,14 +511,15 @@ void Terminal::addContainer(const ContainerCore::Container& container,
 
 void
 Terminal::addContainers(const QVector<ContainerCore::Container>& containers,
-                        double addingTime)
+                        double addingTime,
+                        TransportationMode arrivalMode)
 {
     QMutexLocker locker(&m_mutex);
-    
-    // Check capacity before adding containers
+
+    // Check capacity before adding containers (internal — we hold m_mutex)
     int containerCount = containers.size();
-    
-    QPair<bool, QString> capacityStatus = checkCapacityStatus(containerCount);
+
+    QPair<bool, QString> capacityStatus = checkCapacityStatusInternal(containerCount);
     if (!capacityStatus.first) {
         qWarning() << "Cannot add" << containerCount
                    << "containers to terminal" << m_terminalName
@@ -466,12 +541,13 @@ Terminal::addContainers(const QVector<ContainerCore::Container>& containers,
     locker.unlock();
     
     for (const ContainerCore::Container& container : containers) {
-        addContainer(container, addingTime);
+        addContainer(container, addingTime, arrivalMode);
     }
 }
 
 void Terminal::addContainersFromJson(const QJsonObject& containers,
-                                     double addingTime)
+                                     double addingTime,
+                                     TransportationMode arrivalMode)
 {
     // Parse the containers from JSON
     QVector<ContainerCore::Container> containerList;
@@ -520,7 +596,7 @@ void Terminal::addContainersFromJson(const QJsonObject& containers,
              << "containers from JSON to terminal" << m_terminalName;
     
     // Add the containers
-    addContainers(containerList, addingTime);
+    addContainers(containerList, addingTime, arrivalMode);
 }
 
 QJsonArray
@@ -816,6 +892,33 @@ QJsonObject Terminal::toJson() const
     sdJson["congestion_sensitivity"] = m_sdParams.congestionSensitivity;
     sdJson["delay_sensitivity"] = m_sdParams.delaySensitivity;
     sdJson["max_service_rate"] = m_sdParams.maxServiceRate;
+
+    // Mode-specific delay parameters
+    QJsonObject modeDelayJson;
+    QJsonObject shipDelayJson;
+    shipDelayJson["alpha"] = m_sdParams.shipDelay.alpha;
+    shipDelayJson["beta"] = m_sdParams.shipDelay.beta;
+    modeDelayJson["ship"] = shipDelayJson;
+
+    QJsonObject truckDelayJson;
+    truckDelayJson["alpha"] = m_sdParams.truckDelay.alpha;
+    truckDelayJson["beta"] = m_sdParams.truckDelay.beta;
+    modeDelayJson["truck"] = truckDelayJson;
+
+    QJsonObject trainDelayJson;
+    trainDelayJson["alpha"] = m_sdParams.trainDelay.alpha;
+    trainDelayJson["beta"] = m_sdParams.trainDelay.beta;
+    modeDelayJson["train"] = trainDelayJson;
+
+    sdJson["mode_delay_params"] = modeDelayJson;
+
+    // Arrival penalty parameters
+    QJsonObject arrivalPenaltyJson;
+    arrivalPenaltyJson["ship"] = m_sdParams.shipArrivalPenalty;
+    arrivalPenaltyJson["truck"] = m_sdParams.truckArrivalPenalty;
+    arrivalPenaltyJson["train"] = m_sdParams.trainArrivalPenalty;
+    sdJson["arrival_penalties"] = arrivalPenaltyJson;
+
     json["system_dynamics"] = sdJson;
 
     // Include current SD state if enabled
@@ -965,6 +1068,35 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     if (json.contains("system_dynamics") && json["system_dynamics"].isObject()) {
         QJsonObject sdJson = json["system_dynamics"].toObject();
         systemDynamics = sdJson.toVariantMap();
+
+        if (systemDynamics.contains("mode_delay_params")) {
+            QVariantMap modeMap = systemDynamics.value("mode_delay_params").toMap();
+            if (modeMap.contains("ship")) {
+                QVariantMap ship = modeMap.value("ship").toMap();
+                systemDynamics["ship_delay_alpha"] = ship.value("alpha", 0.5);
+                systemDynamics["ship_delay_beta"] = ship.value("beta", 2.0);
+            }
+            if (modeMap.contains("truck")) {
+                QVariantMap truck = modeMap.value("truck").toMap();
+                systemDynamics["truck_delay_alpha"] = truck.value("alpha", 0.3);
+                systemDynamics["truck_delay_beta"] = truck.value("beta", 2.5);
+            }
+            if (modeMap.contains("train")) {
+                QVariantMap train = modeMap.value("train").toMap();
+                systemDynamics["train_delay_alpha"] = train.value("alpha", 0.8);
+                systemDynamics["train_delay_beta"] = train.value("beta", 3.0);
+            }
+        }
+
+        if (systemDynamics.contains("arrival_penalties")) {
+            QVariantMap penaltyMap = systemDynamics.value("arrival_penalties").toMap();
+            if (penaltyMap.contains("ship"))
+                systemDynamics["ship_arrival_penalty"] = penaltyMap.value("ship", 14400.0);
+            if (penaltyMap.contains("truck"))
+                systemDynamics["truck_arrival_penalty"] = penaltyMap.value("truck", 1800.0);
+            if (penaltyMap.contains("train"))
+                systemDynamics["train_arrival_penalty"] = penaltyMap.value("train", 7200.0);
+        }
     }
 
     // Create terminal
@@ -1025,10 +1157,67 @@ double Terminal::calculateServiceCapacity(double congestion) const
            (1.0 + m_sdParams.congestionSensitivity * congestion);
 }
 
-double Terminal::calculateDelayMultiplier(double congestion) const
+double Terminal::calculateDelayMultiplier(double utilization,
+                                          TransportationMode mode) const
 {
-    // Equation 8: M_k = 1 + δ * G_k
-    return 1.0 + m_sdParams.delaySensitivity * congestion;
+    // If utilization is below critical threshold, no congestion delay
+    if (utilization <= m_sdParams.criticalUtilization) {
+        return 1.0;
+    }
+
+    // Select mode-specific parameters
+    const ModeDelayParams* params = nullptr;
+    switch (mode) {
+        case TransportationMode::Ship:
+            params = &m_sdParams.shipDelay;
+            break;
+        case TransportationMode::Truck:
+            params = &m_sdParams.truckDelay;
+            break;
+        case TransportationMode::Train:
+            params = &m_sdParams.trainDelay;
+            break;
+        case TransportationMode::Any:
+        default:
+            // Fallback: use legacy linear formula M = 1 + δ * G_k
+            return 1.0 + m_sdParams.delaySensitivity *
+                         calculateCongestion(utilization);
+    }
+
+    // BPR-style volume-delay function:
+    // M_k(t, mode) = 1 + α · (U_k / U_crit)^β
+    double ratio = utilization / m_sdParams.criticalUtilization;
+    return 1.0 + params->alpha * std::pow(ratio, params->beta);
+}
+
+double Terminal::calculateArrivalPenalty(double utilization,
+                                         TransportationMode mode) const
+{
+    // No penalty below critical utilization
+    if (utilization <= m_sdParams.criticalUtilization) {
+        return 0.0;
+    }
+
+    // Select base penalty for this mode (seconds at full congestion)
+    double basePenalty = 0.0;
+    switch (mode) {
+        case TransportationMode::Ship:
+            basePenalty = m_sdParams.shipArrivalPenalty;
+            break;
+        case TransportationMode::Truck:
+            basePenalty = m_sdParams.truckArrivalPenalty;
+            break;
+        case TransportationMode::Train:
+            basePenalty = m_sdParams.trainArrivalPenalty;
+            break;
+        case TransportationMode::Any:
+        default:
+            return 0.0;
+    }
+
+    // Scale penalty by congestion level G_k(t) in [0, 1]
+    double congestion = calculateCongestion(utilization);
+    return basePenalty * congestion;
 }
 
 void Terminal::updateSystemDynamics(double currentTime, double deltaT)
@@ -1064,7 +1253,9 @@ void Terminal::updateSystemDynamics(double currentTime, double deltaT)
     m_sdState.serviceCapacity = calculateServiceCapacity(m_sdState.congestion);
 
     // Calculate delay multiplier M_k(t)
-    m_sdState.delayMultiplier = calculateDelayMultiplier(m_sdState.congestion);
+    // Store legacy multiplier for backward compatibility (mode=Any)
+    m_sdState.delayMultiplier = calculateDelayMultiplier(m_sdState.utilization,
+                                                          TransportationMode::Any);
 
     // Reset per-step counters for the new time step
     m_sdState.arrivalsThisStep = 0;
@@ -1090,6 +1281,33 @@ QJsonObject Terminal::getSystemDynamicsState() const
     params["congestion_sensitivity"] = m_sdParams.congestionSensitivity;
     params["delay_sensitivity"] = m_sdParams.delaySensitivity;
     params["max_service_rate"] = m_sdParams.maxServiceRate;
+
+    // Mode-specific delay parameters
+    QJsonObject modeParams;
+    QJsonObject shipParams;
+    shipParams["alpha"] = m_sdParams.shipDelay.alpha;
+    shipParams["beta"] = m_sdParams.shipDelay.beta;
+    modeParams["ship"] = shipParams;
+
+    QJsonObject truckParams;
+    truckParams["alpha"] = m_sdParams.truckDelay.alpha;
+    truckParams["beta"] = m_sdParams.truckDelay.beta;
+    modeParams["truck"] = truckParams;
+
+    QJsonObject trainParams;
+    trainParams["alpha"] = m_sdParams.trainDelay.alpha;
+    trainParams["beta"] = m_sdParams.trainDelay.beta;
+    modeParams["train"] = trainParams;
+
+    params["mode_delay_params"] = modeParams;
+
+    // Arrival penalty parameters
+    QJsonObject arrivalPenalties;
+    arrivalPenalties["ship_seconds"] = m_sdParams.shipArrivalPenalty;
+    arrivalPenalties["truck_seconds"] = m_sdParams.truckArrivalPenalty;
+    arrivalPenalties["train_seconds"] = m_sdParams.trainArrivalPenalty;
+    params["arrival_penalties"] = arrivalPenalties;
+
     state["parameters"] = params;
 
     // Current state
@@ -1102,6 +1320,17 @@ QJsonObject Terminal::getSystemDynamicsState() const
     currentState["departures_this_step"] = m_sdState.departuresThisStep;
     currentState["last_update_time"] = m_sdState.lastUpdateTime;
     currentState["delta_t"] = m_sdState.deltaT;
+
+    // Mode-specific delay multipliers at current utilization
+    QJsonObject modeMultipliers;
+    modeMultipliers["ship"] = calculateDelayMultiplier(
+        m_sdState.utilization, TransportationMode::Ship);
+    modeMultipliers["truck"] = calculateDelayMultiplier(
+        m_sdState.utilization, TransportationMode::Truck);
+    modeMultipliers["train"] = calculateDelayMultiplier(
+        m_sdState.utilization, TransportationMode::Train);
+    currentState["mode_delay_multipliers"] = modeMultipliers;
+
     state["state"] = currentState;
 
     // Derived values
@@ -1110,6 +1339,12 @@ QJsonObject Terminal::getSystemDynamicsState() const
     state["max_capacity"] = m_maxCapacity;
 
     return state;
+}
+
+double Terminal::getDelayMultiplier(TransportationMode mode) const
+{
+    QMutexLocker locker(&m_mutex);
+    return calculateDelayMultiplier(m_sdState.utilization, mode);
 }
 
 int Terminal::getRemainingServiceCapacity() const

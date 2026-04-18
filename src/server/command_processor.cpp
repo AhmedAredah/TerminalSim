@@ -131,19 +131,64 @@ void CommandProcessor::registerCommands()
 
         Terminal *terminal = getTerminalFromParams(params);
 
-        QList<ContainerCore::Container> containers;
-
-        QVariantList containersList = params.value("containers").toList();
-        for (const QVariant &containerVar : containersList)
-        {
-            QJsonObject containerJson =
-                QJsonDocument::fromJson(containerVar.toString().toUtf8())
-                    .object();
-            ContainerCore::Container container(containerJson);
-            containers.append(container);
+        // Extract arrival mode if provided
+        TransportationMode arrivalMode = TransportationMode::Any;
+        if (params.contains("arrival_mode")) {
+            arrivalMode = EnumUtils::stringToTransportationMode(
+                params.value("arrival_mode").toString());
         }
 
-        terminal->addContainers(containers, addingTime);
+        QList<ContainerCore::Container> containers;
+
+        QVariant containersValue = params.value("containers");
+
+        if (containersValue.typeId() == QMetaType::QString)
+        {
+            // JSON document string (from CargoNetSim string variant)
+            // Format: {"containers": [{...}, {...}]}
+            QString jsonStr = containersValue.toString();
+            QJsonDocument doc =
+                QJsonDocument::fromJson(jsonStr.toUtf8());
+            if (doc.isObject())
+            {
+                QJsonArray arr =
+                    doc.object().value("containers").toArray();
+                for (const QJsonValue &val : arr)
+                {
+                    if (val.isObject())
+                    {
+                        ContainerCore::Container container(
+                            val.toObject());
+                        containers.append(container);
+                    }
+                }
+            }
+        }
+        else if (containersValue.canConvert<QVariantList>())
+        {
+            // List of container objects (from QJsonArray path)
+            QVariantList containersList = containersValue.toList();
+            for (const QVariant &containerVar : containersList)
+            {
+                QJsonObject containerJson;
+                if (containerVar.canConvert<QVariantMap>())
+                {
+                    containerJson =
+                        QJsonObject::fromVariantMap(containerVar.toMap());
+                }
+                else
+                {
+                    containerJson =
+                        QJsonDocument::fromJson(
+                            containerVar.toString().toUtf8())
+                            .object();
+                }
+                ContainerCore::Container container(containerJson);
+                containers.append(container);
+            }
+        }
+
+        terminal->addContainers(containers, addingTime, arrivalMode);
         return QVariant(true);
     });
 
@@ -161,13 +206,20 @@ void CommandProcessor::registerCommands()
 
         Terminal *terminal = getTerminalFromParams(params);
 
+        // Extract arrival mode if provided
+        TransportationMode arrivalMode = TransportationMode::Any;
+        if (params.contains("arrival_mode")) {
+            arrivalMode = EnumUtils::stringToTransportationMode(
+                params.value("arrival_mode").toString());
+        }
+
         QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
         if (!doc.isObject())
         {
             throw std::invalid_argument("Invalid JSON format for containers");
         }
 
-        terminal->addContainersFromJson(doc.object(), addingTime);
+        terminal->addContainersFromJson(doc.object(), addingTime, arrivalMode);
         return QVariant(true);
     });
 
@@ -321,6 +373,33 @@ void CommandProcessor::registerCommands()
         Terminal *terminal = getTerminalFromParams(params);
         return terminal->getSystemDynamicsState();
     });
+
+    registerCommand("update_all_terminals_sd", [this](const QVariantMap &params) {
+        double currentTime = params.value("current_time", 0.0).toDouble();
+        double deltaT = params.value("delta_t", 1.0).toDouble();
+
+        QJsonArray results;
+        QStringList terminalNames = m_graph->getAllTerminalNames(false).keys();
+
+        for (const QString& terminalName : terminalNames)
+        {
+            Terminal* terminal = m_graph->getTerminal(terminalName);
+            if (terminal && terminal->isSystemDynamicsEnabled())
+            {
+                terminal->updateSystemDynamics(currentTime, deltaT);
+
+                QJsonObject terminalResult;
+                terminalResult["terminal_id"] = terminalName;
+                terminalResult["state"] = terminal->getSystemDynamicsState();
+                results.append(terminalResult);
+            }
+        }
+
+        QJsonObject response;
+        response["terminals_updated"] = results.size();
+        response["results"] = results;
+        return response;
+    });
 }
 
 void CommandProcessor::registerCommand(const QString &command,
@@ -403,6 +482,12 @@ CommandProcessor::processJsonCommand(const QJsonObject &commandObject)
     if (commandObject.contains("commandId"))
     {
         response["commandId"] = commandObject["commandId"];
+    }
+
+    // Echo params back so the caller can identify the response
+    if (commandObject.contains("params"))
+    {
+        response["params"] = commandObject["params"];
     }
 
     // Add timestamp
@@ -511,7 +596,8 @@ QString CommandProcessor::determineEventName(const QString &command)
         return "costFunctionUpdated";
     }
     else if (command == "update_system_dynamics"
-             || command == "get_system_dynamics_state")
+             || command == "get_system_dynamics_state"
+             || command == "update_all_terminals_sd")
     {
         return "systemDynamicsUpdated";
     }
@@ -913,8 +999,15 @@ QVariant CommandProcessor::handleAddContainer(const QVariantMap &params)
     // Create container object
     ContainerCore::Container container(containerJson);
 
-    // Add container to terminal
-    terminal->addContainer(container, addingTime);
+    // Extract arrival mode if provided
+    TransportationMode arrivalMode = TransportationMode::Any;
+    if (params.contains("arrival_mode")) {
+        arrivalMode = EnumUtils::stringToTransportationMode(
+            params.value("arrival_mode").toString());
+    }
+
+    // Add container to terminal with mode-specific delay
+    terminal->addContainer(container, addingTime, arrivalMode);
 
     return true;
 }
