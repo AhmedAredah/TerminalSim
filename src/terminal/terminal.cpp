@@ -977,10 +977,8 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     
     // Use custom_config wrapper if present (CargoNetSim sends nested format);
     // fall back to flat top-level for backward compat with other senders.
-    const QJsonObject cfg = (json.contains("custom_config")
-                             && json["custom_config"].isObject())
-        ? json["custom_config"].toObject()
-        : json;
+    const QJsonValue cfgVal = json.value("custom_config");
+    const QJsonObject cfg   = cfgVal.isObject() ? cfgVal.toObject() : json;
 
     // Extract mode network aliases
     QMap<QPair<TransportationMode, QString>, QString> modeNetworkAliases;
