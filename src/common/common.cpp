@@ -2,7 +2,7 @@
 
 #include <QMetaEnum>
 #include <QString>
-#include <QDebug>
+#include "LogCategories.h"
 
 namespace TerminalSim {
 
@@ -41,9 +41,9 @@ TransportationMode EnumUtils::stringToTransportationMode(const QString& str) {
     }
     
     // Return default value if conversion fails
-    qWarning() << "Invalid TransportationMode string:"
-               << str
-               << "- defaulting to Truck";
+    qCWarning(lcCommon) << "Invalid TransportationMode string:"
+                        << str
+                        << "- defaulting to Truck";
     return TransportationMode::Truck;
 }
 
@@ -72,9 +72,9 @@ TerminalInterface EnumUtils::stringToTerminalInterface(const QString& str) {
     }
 
     // Return default value if conversion fails
-    qWarning() << "Invalid TerminalInterface string:"
-               << str
-               << "- defaulting to LAND_SIDE";
+    qCWarning(lcCommon) << "Invalid TerminalInterface string:"
+                        << str
+                        << "- defaulting to LAND_SIDE";
     return TerminalInterface::LAND_SIDE;
 }
 
