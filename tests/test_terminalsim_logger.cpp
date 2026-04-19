@@ -9,11 +9,17 @@ class TestTerminalSimLogger : public QObject
     Q_OBJECT
 
 private slots:
+    void init();
     void cleanup();
     void test_startLogging_createsLogFile();
     void test_log_writesFormattedEntry();
     void test_stopLogging_allowsRestartWithNewDir();
 };
+
+void TestTerminalSimLogger::init()
+{
+    TerminalSim::TerminalSimLogger::getInstance()->stopLogging();
+}
 
 void TestTerminalSimLogger::cleanup()
 {
@@ -80,6 +86,19 @@ void TestTerminalSimLogger::test_stopLogging_allowsRestartWithNewDir()
     QDir d1(dir1.path()), d2(dir2.path());
     QCOMPARE(d1.entryList({"terminalsim_*.log"}, QDir::Files).size(), 1);
     QCOMPARE(d2.entryList({"terminalsim_*.log"}, QDir::Files).size(), 1);
+
+    // Verify content isolation: dir1's file has "first session", dir2's has "second session"
+    QFile f1(dir1.filePath(d1.entryList({"terminalsim_*.log"}, QDir::Files).first()));
+    QVERIFY(f1.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString c1 = QString::fromUtf8(f1.readAll());
+    QVERIFY(c1.contains("first session"));
+    QVERIFY(!c1.contains("second session"));
+
+    QFile f2(dir2.filePath(d2.entryList({"terminalsim_*.log"}, QDir::Files).first()));
+    QVERIFY(f2.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString c2 = QString::fromUtf8(f2.readAll());
+    QVERIFY(c2.contains("second session"));
+    QVERIFY(!c2.contains("first session"));
 }
 
 QTEST_MAIN(TestTerminalSimLogger)

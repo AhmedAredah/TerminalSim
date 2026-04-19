@@ -33,6 +33,10 @@ void TerminalSimLogger::startLogging(const QString &logDir)
     {
         m_logStream.setDevice(&m_logFile);
     }
+    else
+    {
+        qWarning() << "TerminalSimLogger: failed to open log file:" << fileName;
+    }
 }
 
 void TerminalSimLogger::stopLogging()
@@ -41,6 +45,7 @@ void TerminalSimLogger::stopLogging()
     if (!m_logFile.isOpen())
         return;
     m_logStream.flush();
+    m_logStream.setDevice(nullptr);
     m_logFile.close();
 }
 
@@ -64,7 +69,7 @@ void TerminalSimLogger::log(QtMsgType     type,
     }();
 
     const QString timestamp =
-        QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz");
+        QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz");
 
     m_logStream << "[" << timestamp << "] "
                 << "[" << levelStr  << "] "
