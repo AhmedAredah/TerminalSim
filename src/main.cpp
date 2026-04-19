@@ -1,149 +1,149 @@
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QCommandLineOption>
-#include <QDebug>
+#include <QDir>
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QFile>
-#include <QDir>
-#include <QLocalSocket>
 #include <QLocalServer>
+#include <QLocalSocket>
+#include <QLoggingCategory>
 
+#include "common/LogCategories.h"
+#include "common/LogMessageHandler.h"
+#include "common/TerminalSimLogger.h"
 #include "server/terminal_graph_server.h"
 
 
-bool isAnotherInstanceRunning(const QString &serverName) {
+bool isAnotherInstanceRunning(const QString &serverName)
+{
     QLocalSocket socket;
     socket.connectToServer(serverName);
-    if (socket.waitForConnected(100)) {
-        return true; // Another instance is already running
-    }
-    return false; // No instance running
+    if (socket.waitForConnected(100))
+        return true;
+    return false;
 }
 
-void createLocalServer(const QString &serverName) {
+void createLocalServer(const QString &serverName)
+{
     QLocalServer *localServer = new QLocalServer();
     localServer->setSocketOptions(QLocalServer::WorldAccessOption);
-    if (!localServer->listen(serverName)) {
-        qCritical() << "Failed to create local server:"
-                    << localServer->errorString();
+    if (!localServer->listen(serverName))
+    {
+        qCCritical(lcInit) << "Failed to create local server:"
+                           << localServer->errorString();
         exit(EXIT_FAILURE);
     }
 }
 
 int main(int argc, char *argv[])
 {
+    // Configure filter rules — debug on in Debug builds, off in Release.
+    // Override at runtime: QT_LOGGING_RULES="terminalsim.*=true"
+#ifdef QT_DEBUG
+    QLoggingCategory::setFilterRules(QStringLiteral(
+        "terminalsim.*.debug=true\n"
+        "terminalsim.*.info=true\n"
+        "terminalsim.*.warning=true\n"
+        "terminalsim.*.critical=true\n"));
+#else
+    QLoggingCategory::setFilterRules(QStringLiteral(
+        "terminalsim.*.debug=false\n"
+        "terminalsim.*.info=true\n"
+        "terminalsim.*.warning=true\n"
+        "terminalsim.*.critical=true\n"));
+#endif
+
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName("TerminalSim");
     QCoreApplication::setApplicationVersion("1.0.0");
 
-    // Unique name for the local server
     const QString uniqueServerName = "TerminalSimServerInstance";
 
-    // Check if another instance is already running
-    if (isAnotherInstanceRunning(uniqueServerName)) {
-        qCritical() << "Another instance of TerminalSim "
-                       "Server is already running.";
+    if (isAnotherInstanceRunning(uniqueServerName))
+    {
+        qCCritical(lcInit) << "Another instance of TerminalSim "
+                              "Server is already running.";
         return EXIT_FAILURE;
     }
 
-    // Create the local server to mark this instance as the active one
     createLocalServer(uniqueServerName);
-    
-    // Command line parsing
+
     QCommandLineParser parser;
     parser.setApplicationDescription("TerminalSim Server");
     parser.addHelpOption();
     parser.addVersionOption();
-    
+
     QCommandLineOption rabbitHostOption(
         QStringList() << "H" << "host",
-        "RabbitMQ host address",
-        "host",
-        "localhost"
-    );
-    
+        "RabbitMQ host address", "host", "localhost");
     QCommandLineOption rabbitPortOption(
         QStringList() << "p" << "port",
-        "RabbitMQ port",
-        "port",
-        "5672"
-    );
-    
+        "RabbitMQ port", "port", "5672");
     QCommandLineOption rabbitUserOption(
         QStringList() << "u" << "user",
-        "RabbitMQ username",
-        "username",
-        "guest"
-    );
-    
+        "RabbitMQ username", "username", "guest");
     QCommandLineOption rabbitPasswordOption(
         QStringList() << "w" << "password",
-        "RabbitMQ password",
-        "password",
-        "guest"
-    );
-    
+        "RabbitMQ password", "password", "guest");
     QCommandLineOption dataPathOption(
         QStringList() << "d" << "data-path",
-        "Path to terminal data directory",
-        "path",
-        "./data"
-    );
-    
+        "Path to terminal data directory", "path", "./data");
     QCommandLineOption loadGraphOption(
         QStringList() << "l" << "load",
-        "Load graph from file",
-        "file"
-    );
-    
+        "Load graph from file", "file");
+
     parser.addOption(rabbitHostOption);
     parser.addOption(rabbitPortOption);
     parser.addOption(rabbitUserOption);
     parser.addOption(rabbitPasswordOption);
     parser.addOption(dataPathOption);
     parser.addOption(loadGraphOption);
-    
+
     parser.process(app);
-    
-    // Get command line values
-    QString rabbitHost = parser.value(rabbitHostOption);
-    int rabbitPort = parser.value(rabbitPortOption).toInt();
-    QString rabbitUser = parser.value(rabbitUserOption);
-    QString rabbitPassword = parser.value(rabbitPasswordOption);
-    QString dataPath = parser.value(dataPathOption);
-    QString loadGraphFile = parser.value(loadGraphOption);
-    
-    // Ensure data directory exists
+
+    const QString rabbitHost     = parser.value(rabbitHostOption);
+    const int     rabbitPort     = parser.value(rabbitPortOption).toInt();
+    const QString rabbitUser     = parser.value(rabbitUserOption);
+    const QString rabbitPassword = parser.value(rabbitPasswordOption);
+    const QString dataPath       = parser.value(dataPathOption);
+    const QString loadGraphFile  = parser.value(loadGraphOption);
+
     QDir dataDir(dataPath);
-    if (!dataDir.exists()) {
+    if (!dataDir.exists())
         dataDir.mkpath(".");
-    }
-    
-    qDebug() << "Starting TerminalSim Server...";
-    qDebug() << "RabbitMQ Host:" << rabbitHost;
-    qDebug() << "RabbitMQ Port:" << rabbitPort;
-    qDebug() << "Data Path:" << dataPath;
-    
-    // Initialize server
-    TerminalSim::TerminalGraphServer* server = 
+
+    // Start file logger (logs go to <dataPath>/logs/).
+    TerminalSim::TerminalSimLogger::getInstance()
+        ->startLogging(dataPath + "/logs");
+
+    // Install handler: stderr output + file logging for terminalsim.*.
+    TerminalSim::installTerminalSimLogHandler(
+        TerminalSim::TerminalSimLogger::getInstance());
+
+    qCDebug(lcInit) << "Starting TerminalSim Server...";
+    qCDebug(lcInit) << "RabbitMQ Host:" << rabbitHost;
+    qCDebug(lcInit) << "RabbitMQ Port:" << rabbitPort;
+    qCDebug(lcInit) << "Data Path:"     << dataPath;
+
+    TerminalSim::TerminalGraphServer *server =
         TerminalSim::TerminalGraphServer::getInstance(dataPath);
 
-    // Connect to RabbitMQ
     if (!server->initialize(rabbitHost, rabbitPort,
-                            rabbitUser, rabbitPassword)) {
-        qCritical() << "Failed to initialize server. Exiting.";
+                            rabbitUser, rabbitPassword))
+    {
+        qCCritical(lcInit) << "Failed to initialize server. Exiting.";
         return 1;
     }
-    
-    qInfo() << "Server initialized and connected to RabbitMQ";
-    qInfo() << "Listening for commands...";
-    
-    // Handle graceful shutdown
+
+    qCInfo(lcInit) << "Server initialized and connected to RabbitMQ";
+    qCInfo(lcInit) << "Listening for commands...";
+
     QObject::connect(&app, &QCoreApplication::aboutToQuit, [server]() {
-        qInfo() << "Shutting down server...";
+        qCInfo(lcInit) << "Shutting down server...";
         server->shutdown();
+        TerminalSim::TerminalSimLogger::getInstance()->stopLogging();
     });
-    
+
     return app.exec();
 }
