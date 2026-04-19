@@ -2,7 +2,6 @@
 #include "dwell_time/container_dwell_time.h"
 
 #include <QDir>
-#include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRandomGenerator>
@@ -14,6 +13,8 @@
 #include <limits>
 #include <stdexcept>
 #include <random>
+
+#include "common/LogCategories.h"
 
 namespace TerminalSim {
 
@@ -155,9 +156,9 @@ Terminal::Terminal(
         if (m_sdParams.enabled) {
             m_sdState.serviceCapacity = m_sdParams.maxServiceRate;
             m_sdState.delayMultiplier = 1.0;
-            qDebug() << "System dynamics enabled for terminal" << m_terminalName
-                     << "with critical utilization:" << m_sdParams.criticalUtilization
-                     << "max service rate:" << m_sdParams.maxServiceRate;
+            qCDebug(lcTerminal) << "System dynamics enabled for terminal" << m_terminalName
+                               << "with critical utilization:" << m_sdParams.criticalUtilization
+                               << "max service rate:" << m_sdParams.maxServiceRate;
         }
     }
 
@@ -175,16 +176,16 @@ Terminal::Terminal(
         m_storage = new ContainerCore::ContainerMap(m_sqlFile);
     }
     
-    qDebug() << "Terminal" << m_terminalName
-             << "initialized with" << m_interfaces.size()
-             << "interfaces and max capacity:"
-             << (m_maxCapacity == std::numeric_limits<int>::max() ?
-                     "unlimited" : QString::number(m_maxCapacity));
+    qCDebug(lcTerminal) << "Terminal" << m_terminalName
+                       << "initialized with" << m_interfaces.size()
+                       << "interfaces and max capacity:"
+                       << (m_maxCapacity == std::numeric_limits<int>::max() ?
+                               "unlimited" : QString::number(m_maxCapacity));
 }
 
 Terminal::~Terminal()
 {
-    qDebug() << "Destroying terminal" << m_terminalName;
+    qCDebug(lcTerminal) << "Destroying terminal" << m_terminalName;
     delete m_storage;
 }
 
@@ -201,10 +202,10 @@ void Terminal::addAliasForModeNetwork(TransportationMode mode,
 {
     QMutexLocker locker(&m_mutex);
     m_modeNetworkAliases[qMakePair(mode, network)] = alias;
-    qDebug() << "Added alias" << alias
-             << "for terminal" << m_terminalName
-             << "with mode" << static_cast<int>(mode)
-             << "and network" << network;
+    qCDebug(lcTerminal) << "Added alias" << alias
+                       << "for terminal" << m_terminalName
+                       << "with mode" << static_cast<int>(mode)
+                       << "and network" << network;
 }
 
 QPair<bool, QString>
@@ -356,16 +357,16 @@ void Terminal::addContainer(const ContainerCore::Container& container,
     // Check capacity (use internal variant — we already hold m_mutex)
     QPair<bool, QString> capacityStatus = checkCapacityStatusInternal(1);
     if (!capacityStatus.first) {
-        qWarning() << "Cannot add container to terminal"
-                   << m_terminalName
-                   << ":" << capacityStatus.second;
+        qCWarning(lcTerminal) << "Cannot add container to terminal"
+                             << m_terminalName
+                             << ":" << capacityStatus.second;
         throw std::runtime_error(QString("Cannot add container: %1")
                                      .arg(capacityStatus.second).toStdString());
     }
 
     if (capacityStatus.second.startsWith("Warning")) {
-        qWarning() << "Terminal" << m_terminalName
-                   << ":" << capacityStatus.second;
+        qCWarning(lcTerminal) << "Terminal" << m_terminalName
+                              << ":" << capacityStatus.second;
     }
 
     // Create a copy of the container to modify
@@ -396,13 +397,13 @@ void Terminal::addContainer(const ContainerCore::Container& container,
                 double originalDwell = yardDwell;
                 yardDwell *= yardMultiplier;
 
-                qDebug() << "Yard dwell congestion applied to container"
-                         << containerCopy->getContainerID()
-                         << ": mode="
-                         << EnumUtils::transportationModeToString(arrivalMode)
-                         << "M_k=" << yardMultiplier
-                         << "yard dwell adjusted from" << originalDwell
-                         << "to" << yardDwell;
+                qCDebug(lcTerminal) << "Yard dwell congestion applied to container"
+                                   << containerCopy->getContainerID()
+                                   << ": mode="
+                                   << EnumUtils::transportationModeToString(arrivalMode)
+                                   << "M_k=" << yardMultiplier
+                                   << "yard dwell adjusted from" << originalDwell
+                                   << "to" << yardDwell;
             }
         }
 
@@ -426,10 +427,10 @@ void Terminal::addContainer(const ContainerCore::Container& container,
                 baseDeparture += customsDelay; // customsDelay is already seconds
                 customsApplied = true;
 
-                qDebug() << "Container"
-                         << containerCopy->getContainerID()
-                         << "selected for customs inspection. Delay:"
-                         << customsDelay << "seconds (not congestion-scaled)";
+                qCDebug(lcTerminal) << "Container"
+                                   << containerCopy->getContainerID()
+                                   << "selected for customs inspection. Delay:"
+                                   << customsDelay << "seconds (not congestion-scaled)";
             }
         }
 
@@ -440,11 +441,11 @@ void Terminal::addContainer(const ContainerCore::Container& container,
             if (arrivalPenalty > 0.0) {
                 baseDeparture += arrivalPenalty;
 
-                qDebug() << "Arrival-side penalty applied to container"
-                         << containerCopy->getContainerID()
-                         << ": mode="
-                         << EnumUtils::transportationModeToString(arrivalMode)
-                         << "penalty=" << arrivalPenalty / 3600.0 << "hours";
+                qCDebug(lcTerminal) << "Arrival-side penalty applied to container"
+                                   << containerCopy->getContainerID()
+                                   << ": mode="
+                                   << EnumUtils::transportationModeToString(arrivalMode)
+                                   << "penalty=" << arrivalPenalty / 3600.0 << "hours";
             }
         }
     }
@@ -503,10 +504,10 @@ void Terminal::addContainer(const ContainerCore::Container& container,
     m_storage->addContainer(containerCopy->getContainerID(),
                             containerCopy, baseAddingTime, baseDeparture);
     
-    qDebug() << "Container" << containerCopy->getContainerID()
-             << "added to terminal" << m_terminalName
-             << "with arrival time:" << baseAddingTime
-             << "and estimated departure:" << baseDeparture;
+    qCDebug(lcTerminal) << "Container" << containerCopy->getContainerID()
+                       << "added to terminal" << m_terminalName
+                       << "with arrival time:" << baseAddingTime
+                       << "and estimated departure:" << baseDeparture;
 }
 
 void
@@ -521,9 +522,9 @@ Terminal::addContainers(const QVector<ContainerCore::Container>& containers,
 
     QPair<bool, QString> capacityStatus = checkCapacityStatusInternal(containerCount);
     if (!capacityStatus.first) {
-        qWarning() << "Cannot add" << containerCount
-                   << "containers to terminal" << m_terminalName
-                   << ":" << capacityStatus.second;
+        qCWarning(lcTerminal) << "Cannot add" << containerCount
+                             << "containers to terminal" << m_terminalName
+                             << ":" << capacityStatus.second;
         throw std::runtime_error(
             QString("Cannot add %1 containers: %2")
                 .arg(containerCount).arg(capacityStatus.second).toStdString()
@@ -531,10 +532,10 @@ Terminal::addContainers(const QVector<ContainerCore::Container>& containers,
     }
     
     if (capacityStatus.second.startsWith("Warning")) {
-        qWarning() << "Terminal" << m_terminalName
-                   << ":" << capacityStatus.second;
+        qCWarning(lcTerminal) << "Terminal" << m_terminalName
+                              << ":" << capacityStatus.second;
     }
-    
+
     // Add each container individually
     // Must release mutex to prevent deadlock during
     // nested lock acquisition in addContainer
@@ -580,20 +581,20 @@ void Terminal::addContainersFromJson(const QJsonObject& containers,
             }
         }
     } catch (const std::exception& e) {
-        qWarning() << "Error parsing containers from JSON:"
-                   << e.what();
+        qCWarning(lcTerminal) << "Error parsing containers from JSON:"
+                              << e.what();
         throw std::runtime_error(QString("Invalid container JSON: %1")
                                      .arg(e.what()).toStdString());
     }
     
     int containerCount = containerList.size();
     if (containerCount == 0) {
-        qWarning() << "No valid containers found in JSON";
+        qCWarning(lcTerminal) << "No valid containers found in JSON";
         return;
     }
-    
-    qDebug() << "Adding" << containerCount
-             << "containers from JSON to terminal" << m_terminalName;
+
+    qCDebug(lcTerminal) << "Adding" << containerCount
+                        << "containers from JSON to terminal" << m_terminalName;
     
     // Add the containers
     addContainers(containerList, addingTime, arrivalMode);
@@ -608,8 +609,8 @@ Terminal::getContainersByDepatingTime(double departingTime,
     // Validate condition
     QStringList validConditions = {"<", "<=", ">", ">=", "==", "!="};
     if (!validConditions.contains(condition)) {
-        qWarning() << "Invalid condition for getContainersByDepatingTime:"
-                   << condition;
+        qCWarning(lcTerminal) << "Invalid condition for getContainersByDepatingTime:"
+                              << condition;
         throw std::invalid_argument(
             QString("Invalid condition: %1. Must be one of: "
                     "<, <=, >, >=, ==, !=").arg(condition).toStdString()
@@ -626,10 +627,10 @@ Terminal::getContainersByDepatingTime(double departingTime,
         result.append(container->toJson());
     }
     
-    qDebug() << "Found" << result.size()
-             << "containers with departure time" <<
+    qCDebug(lcTerminal) << "Found" << result.size()
+                       << "containers with departure time" <<
         condition << departingTime
-             << "in terminal" << m_terminalName;
+                       << "in terminal" << m_terminalName;
     
     return result;
 }
@@ -643,8 +644,8 @@ Terminal::getContainersByAddedTime(double addedTime,
     // Validate condition
     QStringList validConditions = {"<", "<=", ">", ">=", "==", "!="};
     if (!validConditions.contains(condition)) {
-        qWarning() << "Invalid condition for getContainersByAddedTime:"
-                   << condition;
+        qCWarning(lcTerminal) << "Invalid condition for getContainersByAddedTime:"
+                              << condition;
         throw std::invalid_argument(
             QString("Invalid condition: %1. Must be one of: "
                     "<, <=, >, >=, ==, !=").arg(condition).toStdString()
@@ -661,9 +662,9 @@ Terminal::getContainersByAddedTime(double addedTime,
         result.append(container->toJson());
     }
     
-    qDebug() << "Found" << result.size()
-             << "containers with added time" << condition << addedTime
-             << "in terminal" << m_terminalName;
+    qCDebug(lcTerminal) << "Found" << result.size()
+                       << "containers with added time" << condition << addedTime
+                       << "in terminal" << m_terminalName;
     
     return result;
 }
@@ -683,9 +684,9 @@ Terminal::getContainersByNextDestination(const QString& destination) const
         result.append(container->toJson());
     }
     
-    qDebug() << "Found" << result.size()
-             << "containers with next destination" << destination
-             << "in terminal" << m_terminalName;
+    qCDebug(lcTerminal) << "Found" << result.size()
+                       << "containers with next destination" << destination
+                       << "in terminal" << m_terminalName;
     
     return result;
 }
@@ -713,8 +714,8 @@ Terminal::dequeueContainersByNextDestination(const QString& destination)
                     container->getContainerID(), container,
                     0.0, 0.0); // Re-add with original times (will be overwritten)
             }
-            qWarning() << "SD: Service capacity exhausted at terminal" << m_terminalName
-                       << "- cannot serve" << requestedCount << "containers";
+            qCWarning(lcTerminal) << "SD: Service capacity exhausted at terminal" << m_terminalName
+                                  << "- cannot serve" << requestedCount << "containers";
             return QJsonArray();
         }
 
@@ -729,9 +730,9 @@ Terminal::dequeueContainersByNextDestination(const QString& destination)
             }
             containers.resize(servedCount);
 
-            qDebug() << "SD: Service capacity limited departure at terminal"
-                     << m_terminalName << "- served" << servedCount
-                     << "of" << requestedCount << "requested";
+            qCDebug(lcTerminal) << "SD: Service capacity limited departure at terminal"
+                               << m_terminalName << "- served" << servedCount
+                               << "of" << requestedCount << "requested";
         }
 
         // Track departures for SD
@@ -744,9 +745,9 @@ Terminal::dequeueContainersByNextDestination(const QString& destination)
         result.append(container->toJson());
     }
 
-    qDebug() << "Removed" << result.size()
-             << "containers with next destination" << destination
-             << "from terminal" << m_terminalName;
+    qCDebug(lcTerminal) << "Removed" << result.size()
+                       << "containers with next destination" << destination
+                       << "from terminal" << m_terminalName;
 
     return result;
 }
@@ -785,7 +786,7 @@ void Terminal::clear()
 {
     QMutexLocker locker(&m_mutex);
     
-    qDebug() << "Clearing all containers from terminal" << m_terminalName;
+    qCDebug(lcTerminal) << "Clearing all containers from terminal" << m_terminalName;
     m_storage->clear();
 }
 
@@ -939,7 +940,7 @@ Terminal* Terminal::fromJson(const QJsonObject& json,
     // Extract terminal name
     if (!json.contains("terminal_name") ||
         !json["terminal_name"].isString()) {
-        qWarning() << "Missing or invalid terminal_name in JSON";
+        qCWarning(lcTerminal) << "Missing or invalid terminal_name in JSON";
         return nullptr;
     }
     QString terminalName = json["terminal_name"].toString();
@@ -1268,10 +1269,10 @@ void Terminal::updateSystemDynamics(double currentTime, double deltaT)
     m_sdState.arrivalsThisStep = 0;
     m_sdState.departuresThisStep = 0;
 
-    qDebug() << "SD update for" << m_terminalName << "at t=" << currentTime
-             << ": U=" << m_sdState.utilization << "G=" << m_sdState.congestion
-             << "S_cap=" << m_sdState.serviceCapacity
-             << "M=" << m_sdState.delayMultiplier;
+    qCDebug(lcTerminal) << "SD update for" << m_terminalName << "at t=" << currentTime
+                       << ": U=" << m_sdState.utilization << "G=" << m_sdState.congestion
+                       << "S_cap=" << m_sdState.serviceCapacity
+                       << "M=" << m_sdState.delayMultiplier;
 }
 
 QJsonObject Terminal::getSystemDynamicsState() const
