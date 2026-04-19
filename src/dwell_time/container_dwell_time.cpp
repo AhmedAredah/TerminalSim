@@ -1,10 +1,11 @@
 #include "container_dwell_time.h"
 
-#include <QDebug>
 #include <random>
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+
+#include "common/LogCategories.h"
 
 namespace TerminalSim {
 
@@ -21,8 +22,8 @@ std::mt19937& ContainerDwellTime::getGenerator() {
 double
 ContainerDwellTime::gammaDistributionDwellTime(double shape, double scale) {
     if (shape <= 0.0 || scale <= 0.0) {
-        qWarning() << "Invalid parameters for gamma distribution: shape ="
-                   << shape << ", scale =" << scale;
+        qCWarning(lcDwellTime) << "Invalid parameters for gamma distribution: shape ="
+                               << shape << ", scale =" << scale;
         throw std::invalid_argument("Shape and scale parameters must "
                                     "be positive for gamma distribution");
     }
@@ -33,9 +34,9 @@ ContainerDwellTime::gammaDistributionDwellTime(double shape, double scale) {
 
 double ContainerDwellTime::exponentialDistributionDwellTime(double scale) {
     if (scale <= 0.0) {
-        qWarning() << "Invalid parameter for exponential "
-                      "distribution: scale ="
-                   << scale;
+        qCWarning(lcDwellTime) << "Invalid parameter for exponential "
+                                  "distribution: scale ="
+                               << scale;
         throw std::invalid_argument("Scale parameter must be positive for "
                                     "exponential distribution");
     }
@@ -47,8 +48,8 @@ double ContainerDwellTime::exponentialDistributionDwellTime(double scale) {
 double
 ContainerDwellTime::normalDistributionDwellTime(double mean, double stdDev) {
     if (stdDev <= 0.0) {
-        qWarning() << "Invalid parameter for normal distribution: stdDev ="
-                   << stdDev;
+        qCWarning(lcDwellTime) << "Invalid parameter for normal distribution: stdDev ="
+                               << stdDev;
         throw std::invalid_argument("Standard deviation must be positive for"
                                     " normal distribution");
     }
@@ -68,8 +69,8 @@ double
 ContainerDwellTime::lognormalDistributionDwellTime(double mean,
                                                    double sigma) {
     if (sigma <= 0.0) {
-        qWarning() << "Invalid parameter for lognormal distribution: sigma ="
-                   << sigma;
+        qCWarning(lcDwellTime) << "Invalid parameter for lognormal distribution: sigma ="
+                               << sigma;
         throw std::invalid_argument("Sigma parameter must be positive for "
                                     "lognormal distribution");
     }
@@ -128,9 +129,9 @@ ContainerDwellTime::getDepartureTime(double arrivalTime,
         dwellTime = lognormalDistributionDwellTime(mean, sigma);
         
     } else {
-        qWarning() << "Invalid distribution method:"
-                   << method
-                   << "- defaulting to gamma distribution";
+        qCWarning(lcDwellTime) << "Invalid distribution method:"
+                               << method
+                               << "- defaulting to gamma distribution";
         
         dwellTime =
             gammaDistributionDwellTime(defaultGammaShape, defaultGammaScale);
@@ -139,14 +140,14 @@ ContainerDwellTime::getDepartureTime(double arrivalTime,
     // Calculate departure time
     double departureTime = arrivalTime + dwellTime;
     
-    qDebug() << "Container dwell time calculated:"
-             << dwellTime/3600.0
-             << "hours using method:"
-             << method
-             << "- Arrival time:"
-             << arrivalTime
-             << "- Departure time:"
-             << departureTime;
+    qCDebug(lcDwellTime) << "Container dwell time calculated:"
+                        << dwellTime/3600.0
+                        << "hours using method:"
+                        << method
+                        << "- Arrival time:"
+                        << arrivalTime
+                        << "- Departure time:"
+                        << departureTime;
     
     return departureTime;
 }
