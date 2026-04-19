@@ -3,12 +3,14 @@ set(COMMON_SOURCES
     common.cpp
     LogCategories.cpp
     TerminalSimLogger.cpp
+    LogMessageHandler.cpp
 )
 
 set(COMMON_HEADERS
     common.h
     LogCategories.h
     TerminalSimLogger.h
+    LogMessageHandler.h
 )
 
 add_library(terminal_common STATIC ${COMMON_SOURCES} ${COMMON_HEADERS})
