@@ -1,13 +1,14 @@
 #include "command_processor.h"
 
 #include <QDateTime>
-#include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMutexLocker>
 #include <QUuid>
 #include <stdexcept>
+
+#include "common/LogCategories.h"
 
 namespace TerminalSim
 {
@@ -17,13 +18,13 @@ CommandProcessor::CommandProcessor(TerminalGraph *graph, QObject *parent)
     , m_graph(graph)
 {
     registerCommands();
-    qDebug() << "Command processor initialized with" << m_commandHandlers.size()
-             << "command handlers";
+    qCDebug(lcCommandProcessor) << "Command processor initialized with" << m_commandHandlers.size()
+                                << "command handlers";
 }
 
 CommandProcessor::~CommandProcessor()
 {
-    qDebug() << "Command processor destroyed";
+    qCDebug(lcCommandProcessor) << "Command processor destroyed";
 }
 
 void CommandProcessor::registerCommands()
@@ -414,12 +415,12 @@ QVariant CommandProcessor::processCommand(const QString     &command,
 {
     QMutexLocker locker(&m_mutex);
 
-    qDebug() << "Processing command:" << command;
+    qCDebug(lcCommandProcessor) << "Processing command:" << command;
 
     // Check if command exists
     if (!m_commandHandlers.contains(command))
     {
-        qWarning() << "Unknown command:" << command;
+        qCWarning(lcCommandProcessor) << "Unknown command:" << command;
         throw std::invalid_argument(
             QString("Unknown command: %1").arg(command).toStdString());
     }
@@ -440,7 +441,7 @@ QVariant CommandProcessor::processCommand(const QString     &command,
     }
     catch (const std::exception &e)
     {
-        qWarning() << "Error processing command" << command << ":" << e.what();
+        qCWarning(lcCommandProcessor) << "Error processing command" << command << ":" << e.what();
         throw;
     }
 }
@@ -659,8 +660,8 @@ QVariant CommandProcessor::handleResetServer(const QVariantMap &params)
                                        {"risk", 1.0},
                                        {"energyConsumption", 1.0}});
 
-    qInfo() << "Server reset: Terminal graph cleared "
-               "and reinitialized to fresh state";
+    qCInfo(lcCommandProcessor) << "Server reset: Terminal graph cleared "
+                                  "and reinitialized to fresh state";
 
     // Return success
     QVariantMap response;
