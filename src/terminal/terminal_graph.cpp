@@ -1,7 +1,6 @@
 #include "terminal_graph.h"
 
 #include <QCoreApplication>
-#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -15,6 +14,8 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+
+#include "common/LogCategories.h"
 
 namespace TerminalSim
 {
@@ -66,7 +67,7 @@ TerminalGraph::TerminalGraph(const QString &dir)
                                {"distance", 1.0}, {"carbonEmissions", 1.0},
                                {"risk", 1.0},     {"energyConsumption", 1.0}};
 
-    qInfo() << "Graph initialized with dir:" << (dir.isEmpty() ? "None" : dir);
+    qCInfo(lcTerminalGraph) << "Graph initialized with dir:" << (dir.isEmpty() ? "None" : dir);
 }
 
 TerminalGraph::~TerminalGraph()
@@ -89,7 +90,7 @@ TerminalGraph::~TerminalGraph()
         delete term;
     }
 
-    qDebug() << "Graph destroyed";
+    qCDebug(lcTerminalGraph) << "Graph destroyed";
 }
 
 void TerminalGraph::setCostFunctionParameters(const QVariantMap &params)
@@ -213,8 +214,8 @@ Terminal *TerminalGraph::addTerminalInternal(const QVariantMap &terminalData)
     m_terminalData[canonical] = TerminalDetails{
         term->estimateContainerHandlingTime(), term->estimateContainerCost()};
 
-    qDebug() << "Added terminal" << canonical << "with"
-             << (terminalNames.size() - 1) << "aliases";
+    qCDebug(lcTerminalGraph) << "Added terminal" << canonical << "with"
+                             << (terminalNames.size() - 1) << "aliases";
 
     return term;
 }
@@ -382,7 +383,7 @@ void TerminalGraph::addAliasToTerminal(const QString &name,
 
     m_terminalAliases[alias] = canonical;
     m_canonicalToAliases[canonical].insert(alias);
-    qDebug() << "Added alias" << alias << "to" << canonical;
+    qCDebug(lcTerminalGraph) << "Added alias" << alias << "to" << canonical;
 }
 
 QStringList TerminalGraph::getAliasesOfTerminal(const QString &name) const
@@ -484,8 +485,8 @@ TerminalGraph::addRouteInternal(const QString &id, const QString &start,
     m_graph.addEdge(startCanonical, endCanonical, cost, mode);
     m_graph.addEdge(endCanonical, startCanonical, cost, mode);
 
-    qDebug() << "Added bidirectional route" << id << "between" << startCanonical
-             << "and" << endCanonical << "with mode" << static_cast<int>(mode);
+    qCDebug(lcTerminalGraph) << "Added bidirectional route" << id << "between" << startCanonical
+                             << "and" << endCanonical << "with mode" << static_cast<int>(mode);
     return {startCanonical, endCanonical};
 }
 
@@ -651,7 +652,7 @@ bool TerminalGraph::removeTerminal(const QString &name)
     // Delete the terminal after releasing the lock
     delete termToDelete;
 
-    qDebug() << "Removed terminal" << name;
+    qCDebug(lcTerminalGraph) << "Removed terminal" << name;
     return success;
 }
 
@@ -716,7 +717,7 @@ void TerminalGraph::clear()
         delete term;
     }
 
-    qDebug() << "Graph cleared";
+    qCDebug(lcTerminalGraph) << "Graph cleared";
 }
 
 QVariantMap TerminalGraph::getTerminalStatus(const QString &name) const
@@ -1121,8 +1122,8 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
 
         if (!edgeDataCopy.contains(edgeKey))
         {
-            qWarning() << "Edge data not found for path segment" << fromName
-                       << "->" << toName;
+            qCWarning(lcTerminalGraph) << "Edge data not found for path segment" << fromName
+                                       << "->" << toName;
             continue;
         }
 
@@ -1144,8 +1145,8 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
 
         if (!found)
         {
-            qWarning() << "No matching edge found for mode"
-                       << static_cast<int>(requestedMode);
+            qCWarning(lcTerminalGraph) << "No matching edge found for mode"
+                                       << static_cast<int>(requestedMode);
             continue;
         }
 
@@ -1267,7 +1268,7 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
     // Return early for invalid input
     if (n <= 0)
     {
-        qDebug() << "Invalid request: n must be positive";
+        qCDebug(lcTerminalGraph) << "Invalid request: n must be positive";
         return QList<Path>();
     }
 
@@ -1282,8 +1283,8 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
         if (!m_terminals.contains(startCanonical)
             || !m_terminals.contains(endCanonical))
         {
-            qDebug() << "Terminal not found: start=" << startCanonical
-                     << " end=" << endCanonical;
+            qCDebug(lcTerminalGraph) << "Terminal not found: start=" << startCanonical
+                                     << " end=" << endCanonical;
             return QList<Path>();
         }
     }
@@ -1331,8 +1332,8 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
         result[i].pathId = i + 1;
     }
 
-    qDebug() << "Found" << result.size() << "paths from" << startCanonical
-             << "to" << endCanonical;
+    qCDebug(lcTerminalGraph) << "Found" << result.size() << "paths from" << startCanonical
+                             << "to" << endCanonical;
     return result.toList();
 }
 
