@@ -1,10 +1,12 @@
 # Common module
 set(COMMON_SOURCES
     common.cpp
+    LogCategories.cpp
 )
 
 set(COMMON_HEADERS
     common.h
+    LogCategories.h
 )
 
 add_library(terminal_common STATIC ${COMMON_SOURCES} ${COMMON_HEADERS})
