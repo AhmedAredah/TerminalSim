@@ -2,7 +2,7 @@
 #pragma once
 
 #include "Edge.h"
-#include <QDebug>
+#include "common/LogCategories.h"
 #include <QString>
 #include <set>
 #include <unordered_map>
@@ -55,7 +55,7 @@ public:
         if (m_adjacencyList.find(id) != m_adjacencyList.end())
         {
             // Handle QString differently from numeric types
-            qDebug() << "Vertex already exists:" << id;
+            qCDebug(lcGraph) << "Vertex already exists:" << id;
             return false;
         }
 
@@ -81,15 +81,15 @@ public:
         // Reject edges with TransportationMode::Any
         if (mode == TerminalSim::TransportationMode::Any)
         {
-            qDebug() << "Cannot add edge with TransportationMode::Any. Specify "
-                        "a concrete mode.";
+            qCDebug(lcGraph) << "Cannot add edge with TransportationMode::Any. Specify "
+                               "a concrete mode.";
             return false;
         }
 
         if (m_adjacencyList.find(source) == m_adjacencyList.end()
             || m_adjacencyList.find(target) == m_adjacencyList.end())
         {
-            qDebug() << "Source or target vertex doesn't exist";
+            qCDebug(lcGraph) << "Source or target vertex doesn't exist";
             return false;
         }
 
@@ -110,8 +110,8 @@ public:
         }
         else
         {
-            qDebug() << "Edge already exists from" << source << "to" << target
-                     << "with mode" << static_cast<int>(mode);
+            qCDebug(lcGraph) << "Edge already exists from" << source << "to" << target
+                             << "with mode" << static_cast<int>(mode);
             return false;
         }
     }
@@ -163,7 +163,7 @@ public:
         if (m_adjacencyList.find(source) == m_adjacencyList.end()
             || m_adjacencyList.find(target) == m_adjacencyList.end())
         {
-            qDebug() << "Source or target vertex doesn't exist";
+            qCDebug(lcGraph) << "Source or target vertex doesn't exist";
             return false;
         }
 
@@ -215,14 +215,14 @@ public:
         {
             if (mode == TerminalSim::TransportationMode::Any)
             {
-                qDebug() << "No edges from" << source << "to" << target
+                qCDebug(lcGraph) << "No edges from" << source << "to" << target
                          << "exist";
             }
             else
             {
-                qDebug() << "Edge from" << source << "to" << target
-                         << "with mode" << static_cast<int>(mode)
-                         << "doesn't exist";
+                qCDebug(lcGraph) << "Edge from" << source << "to" << target
+                                 << "with mode" << static_cast<int>(mode)
+                                 << "doesn't exist";
             }
         }
 
@@ -278,21 +278,21 @@ public:
      */
     void print(bool detailed = false) const
     {
-        qDebug() << "Graph with" << vertexCount() << "vertices and"
-                 << edgeCount() << "edges";
+        qCDebug(lcGraph) << "Graph with" << vertexCount() << "vertices and"
+                         << edgeCount() << "edges";
 
         for (const auto &[source, edges] : m_adjacencyList)
         {
-            qDebug() << "Vertex" << source << "connections:";
+            qCDebug(lcGraph) << "Vertex" << source << "connections:";
             for (const auto &edge : edges)
             {
                 if (detailed)
                 {
-                    qDebug() << "  " << edge.toString();
+                    qCDebug(lcGraph) << "  " << edge.toString();
                 }
                 else
                 {
-                    qDebug() << "  ->" << edge.target();
+                    qCDebug(lcGraph) << "  ->" << edge.target();
                 }
             }
         }
