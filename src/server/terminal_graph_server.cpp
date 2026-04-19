@@ -1,7 +1,6 @@
 // terminal_graph_server.cpp
 #include "terminal_graph_server.h"
 
-#include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMutexLocker>
@@ -13,6 +12,8 @@
 #include <QThread>
 #include <QTimer>
 #include <stdexcept>
+
+#include "common/LogCategories.h"
 
 namespace TerminalSim {
 
@@ -41,10 +42,10 @@ TerminalGraphServer::TerminalGraphServer(
     m_commandProcessor(nullptr),
     m_serverId(QUuid::createUuid().toString())
 {
-    qDebug() << "Terminal Graph Server created with ID:" << m_serverId
-             << "and terminal directory:"
-             << (!pathToTerminalsDirectory.isEmpty() ?
-                     pathToTerminalsDirectory : "None");
+    qCDebug(lcServer) << "Terminal Graph Server created with ID:" << m_serverId
+                     << "and terminal directory:"
+                     << (!pathToTerminalsDirectory.isEmpty() ?
+                             pathToTerminalsDirectory : "None");
     
     // Create command processor
     m_commandProcessor = new CommandProcessor(m_graph, this);
@@ -65,7 +66,7 @@ TerminalGraphServer::~TerminalGraphServer()
     delete m_graph;
     m_graph = nullptr;
     
-    qDebug() << "Terminal Graph Server destroyed";
+    qCDebug(lcServer) << "Terminal Graph Server destroyed";
     
     // Reset singleton instance
     QMutexLocker instanceLocker(&s_instanceMutex);
@@ -104,12 +105,12 @@ bool TerminalGraphServer::initialize(
     
     if (connected) {
         
-        qDebug() << "Terminal Graph Server initialized "
-                    "and connected to RabbitMQ at"
-                 << rabbitMQHost << ":" << rabbitMQPort;
+        qCDebug(lcServer) << "Terminal Graph Server initialized "
+                            "and connected to RabbitMQ at"
+                         << rabbitMQHost << ":" << rabbitMQPort;
     } else {
-        qWarning() << "Failed to connect to RabbitMQ at"
-                   << rabbitMQHost << ":" << rabbitMQPort;
+        qCWarning(lcServer) << "Failed to connect to RabbitMQ at"
+                            << rabbitMQHost << ":" << rabbitMQPort;
     }
     
     return connected;
@@ -119,7 +120,7 @@ void TerminalGraphServer::shutdown()
 {
     QMutexLocker locker(&m_mutex);
     
-    qDebug() << "Shutting down Terminal Graph Server...";
+    qCDebug(lcServer) << "Shutting down Terminal Graph Server...";
     
     // Disconnect from RabbitMQ
     if (m_rabbitMQHandler) {
@@ -146,7 +147,7 @@ TerminalGraphServer::processCommand(const QString& command,
     QMutexLocker locker(&m_mutex);
     
     if (!m_commandProcessor) {
-        qWarning() << "Cannot process command: command processor is null";
+        qCWarning(lcServer) << "Cannot process command: command processor is null";
         throw std::runtime_error("Command processor is not initialized");
     }
     
@@ -161,8 +162,8 @@ void TerminalGraphServer::onMessageReceived(const QJsonObject& message)
     emit messageReceived(message);
     
     if (!m_commandProcessor || !m_rabbitMQHandler) {
-        qWarning() << "Cannot process message: command processor or "
-                      "RabbitMQ handler is null";
+        qCWarning(lcServer) << "Cannot process message: command processor or "
+                              "RabbitMQ handler is null";
         return;
     }
     
