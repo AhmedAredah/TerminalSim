@@ -1192,10 +1192,12 @@ double Terminal::calculateDelayMultiplier(double utilization,
                          calculateCongestion(utilization);
     }
 
-    // BPR-style volume-delay function:
-    // M_k(t, mode) = 1 + α · (U_k / U_crit)^β
-    double ratio = utilization / m_sdParams.criticalUtilization;
-    return 1.0 + params->alpha * std::pow(ratio, params->beta);
+    // Continuous BPR-inspired volume-delay function (normalized excess):
+    // M_k(t, mode) = 1 + α · ((U_k - U_crit) / (1 - U_crit))^β
+    // Continuous at U_k = U_crit (numerator → 0), max multiplier 1+α at U_k = 1.
+    double range  = 1.0 - m_sdParams.criticalUtilization;
+    double excess = utilization - m_sdParams.criticalUtilization;
+    return 1.0 + params->alpha * std::pow(excess / range, params->beta);
 }
 
 double Terminal::calculateArrivalPenalty(double utilization,

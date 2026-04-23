@@ -25,8 +25,10 @@ namespace TerminalSim
  * - Trucks (M/Ek/c queueing): lowest α, steeper β (many servers, short service)
  * - Trains (batch/scheduled): highest α, steepest β (cascading conflicts)
  *
- * Formula: M_k(t, mode) = 1 + α · (U_k / U_crit)^β   when U_k > U_crit
- *          M_k(t, mode) = 1.0                            otherwise
+ * Formula: M_k(t, mode) = 1 + α · ((U_k - U_crit) / (1 - U_crit))^β   when U_k > U_crit
+ *          M_k(t, mode) = 1.0                                              otherwise
+ *
+ * Continuous at U_k = U_crit (multiplier → 1 from both sides); max = 1+α at U_k = 1.
  */
 struct ModeDelayParams
 {
@@ -50,8 +52,8 @@ struct SystemDynamicsParams
     double maxServiceRate       = 100.0; ///< S_max,k: max service rate (TEU/hour)
 
     // Mode-specific delay parameters (BPR-style volume-delay)
-    ModeDelayParams shipDelay  {0.5, 2.0};  ///< Ship: M/D/c queueing behavior
-    ModeDelayParams truckDelay {0.3, 2.5};  ///< Truck: M/Ek/c, lower & smoother
+    ModeDelayParams shipDelay  {0.5, 2.5};  ///< Ship: M/D/c queueing behavior
+    ModeDelayParams truckDelay {0.3, 2.0};  ///< Truck: M/Ek/c, lower & smoother
     ModeDelayParams trainDelay {0.8, 3.0};  ///< Train: batch/scheduled, steepest
 
     // Arrival-side base penalty times (seconds) at full congestion (U_k = 1.0)
