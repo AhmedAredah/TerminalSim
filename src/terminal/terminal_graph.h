@@ -165,14 +165,16 @@ private:
 
     // Convert between GraphLib edge path and TerminalSim path
     Path convertEdgePathToTerminalPath(const EdgePathInfoType &pathInfo,
-                                       int pathId, TransportationMode mode,
+                                       int displayPathId,
+                                       TransportationMode mode,
                                        bool skipDelays) const;
 
     // Update graph for specific mode
     void updateGraph(TransportationMode mode);
 
     // Build a path segment with detailed costs
-    void buildPathSegment(PathSegment &segment, bool isStart, bool isEnd,
+    void buildPathSegment(PathSegment &segment, int sequenceIndex,
+                          bool isStart, bool isEnd,
                           bool skipStartTerminal, bool skipEndTerminal,
                           const QString &from, const QString &to,
                           TransportationMode mode,

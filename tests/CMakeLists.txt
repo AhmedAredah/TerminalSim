@@ -12,3 +12,17 @@ target_link_libraries(test_terminalsim_logger
 )
 
 add_test(NAME test_terminalsim_logger COMMAND test_terminalsim_logger)
+
+add_executable(test_pathfound_contract
+    test_pathfound_contract.cpp
+)
+
+target_link_libraries(test_pathfound_contract
+    PRIVATE
+    terminal_core
+    terminal_common
+    Qt6::Core
+    Qt6::Test
+)
+
+add_test(NAME test_pathfound_contract COMMAND test_pathfound_contract)

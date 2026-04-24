@@ -9,8 +9,10 @@
 #include <QPair>
 #include <QQueue>
 #include <QRandomGenerator>
+#include <QCryptographicHash>
 #include <QSet>
 #include <QThread>
+#include <QUrl>
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
@@ -19,6 +21,50 @@
 
 namespace TerminalSim
 {
+
+namespace {
+
+QString percentEncode(const QString &value)
+{
+    return QString::fromUtf8(QUrl::toPercentEncoding(value));
+}
+
+QString canonicalSegmentSignature(const QList<PathSegment> &segments)
+{
+    QString signature;
+    for (const PathSegment &segment : segments)
+    {
+        signature += segment.from + "->" + segment.to + ":"
+                     + QString::number(static_cast<int>(segment.mode)) + "|";
+    }
+    return signature;
+}
+
+QString buildPathUid(const Path &path)
+{
+    const QByteArray signatureHash =
+        QCryptographicHash::hash(
+            canonicalSegmentSignature(path.segments).toUtf8(),
+            QCryptographicHash::Sha256)
+            .toHex();
+
+    return QStringLiteral(
+               "pf|v1|start=%1|end=%2|mode=%3|skip=%4|rank=%5|sig=%6")
+        .arg(percentEncode(path.startTerminal),
+             percentEncode(path.endTerminal),
+             QString::number(path.requestedMode),
+             path.skipSameModeTerminalDelaysAndCosts ? QStringLiteral("1")
+                                                     : QStringLiteral("0"),
+             QString::number(path.rank),
+             QString::fromLatin1(signatureHash));
+}
+
+double estimatedCostValue(const PathSegment &segment, const char *key)
+{
+    return segment.estimatedCost.value(QString::fromLatin1(key)).toDouble();
+}
+
+} // namespace
 
 TerminalGraph::TerminalGraph(const QString &dir)
     : QObject(nullptr)
@@ -830,10 +876,12 @@ double TerminalGraph::computeCost(const QVariantMap &params,
     return cost;
 }
 
-void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
-                                     bool isEnd, bool skipStartTerminal,
-                                     bool skipEndTerminal, const QString &from,
-                                     const QString &to, TransportationMode mode,
+void TerminalGraph::buildPathSegment(PathSegment &segment, int sequenceIndex,
+                                     bool isStart, bool isEnd,
+                                     bool skipStartTerminal,
+                                     bool skipEndTerminal,
+                                     const QString &from, const QString &to,
+                                     TransportationMode mode,
                                      const QVariantMap &attributes) const
 {
     segment.from           = from;
@@ -841,7 +889,7 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     segment.fromTerminalId = from;
     segment.toTerminalId   = to;
     segment.mode           = mode;
-    // segment.attributes     = attributes;
+    segment.sequenceIndex  = sequenceIndex;
 
     // Get terminal data safely
     double fromHandlingTime = 0.0;
@@ -858,11 +906,7 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     }
 
     // Store estimated raw values
-    segment.estimatedValues                          = attributes;
-    segment.estimatedValues["previousTerminalDelay"] = fromHandlingTime;
-    segment.estimatedValues["previousTerminalCost"]  = fromCost;
-    segment.estimatedValues["nextTerminalDelay"]     = toHandlingTime;
-    segment.estimatedValues["nextTerminalCost"]      = toCost;
+    segment.estimatedValues = attributes;
 
     // Prepare complete params for cost computation
     QVariantMap params       = attributes;
@@ -876,43 +920,32 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
         costFunctionWeights = m_costFunctionParametersWeights;
     }
 
-    // Compute total cost
-    double totalWeight = 0.0;
-    // segment.weight =
-    //     computeCost(params, costFunctionWeights, mode);
-
     // Calculate detailed cost breakdown
     double carbonEmissions =
         computeCost({{"carbonEmissions", params["carbonEmissions"]}},
                     costFunctionWeights, mode);
     segment.estimatedCost["carbonEmissions"] = carbonEmissions;
-    totalWeight += carbonEmissions;
 
     double directCost =
         computeCost({{"cost", params["cost"]}}, costFunctionWeights, mode);
     segment.estimatedCost["cost"] = directCost;
-    totalWeight += directCost;
 
     double distance = computeCost({{"distance", params["distance"]}},
                                   costFunctionWeights, mode);
     segment.estimatedCost["distance"] = distance;
-    totalWeight += distance;
 
     double energyConsumption =
         computeCost({{"energyConsumption", params["energyConsumption"]}},
                     costFunctionWeights, mode);
     segment.estimatedCost["energyConsumption"] = energyConsumption;
-    totalWeight += energyConsumption;
 
     double risk =
         computeCost({{"risk", params["risk"]}}, costFunctionWeights, mode);
     segment.estimatedCost["risk"] = risk;
-    totalWeight += risk;
 
     double travelTime = computeCost({{"travelTime", params["travelTime"]}},
                                     costFunctionWeights, mode);
     segment.estimatedCost["travelTime"] = travelTime;
-    totalWeight += travelTime;
 
     double previousTerminalDelay = 0.0;
     if (!skipStartTerminal)
@@ -922,7 +955,6 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     }
     previousTerminalDelay =
         isStart ? previousTerminalDelay : previousTerminalDelay / 2;
-    totalWeight += previousTerminalDelay;
     segment.estimatedCost["previousTerminalDelay"] = previousTerminalDelay;
 
     double previousTerminalCost = 0.0;
@@ -934,7 +966,6 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     previousTerminalCost =
         isStart ? previousTerminalCost : previousTerminalCost / 2;
     segment.estimatedCost["previousTerminalCost"] = previousTerminalCost;
-    totalWeight += previousTerminalCost;
 
     double nextTerminalDelay = 0.0;
     if (!skipEndTerminal)
@@ -944,7 +975,6 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     }
     nextTerminalDelay = isEnd ? nextTerminalDelay : nextTerminalDelay / 2;
     segment.estimatedCost["nextTerminalDelay"] = nextTerminalDelay;
-    totalWeight += nextTerminalDelay;
 
     double nextTerminalCost = 0.0;
     if (!skipEndTerminal)
@@ -954,9 +984,17 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     }
     nextTerminalCost = isEnd ? nextTerminalCost : nextTerminalCost / 2;
     segment.estimatedCost["nextTerminalCost"] = nextTerminalCost;
-    totalWeight += nextTerminalCost;
 
-    segment.weight = totalWeight;
+    segment.weightedEdgeCost =
+        carbonEmissions + directCost + distance + energyConsumption
+        + risk + travelTime;
+    segment.weightedTerminalCostEmbeddedInSegment =
+        previousTerminalDelay + previousTerminalCost + nextTerminalDelay
+        + nextTerminalCost;
+    segment.rankingCostContribution =
+        segment.weightedEdgeCost
+        + segment.weightedTerminalCostEmbeddedInSegment;
+    segment.weight = segment.rankingCostContribution;
 }
 
 void TerminalGraph::updateGraph(TransportationMode requestedMode)
@@ -1034,25 +1072,30 @@ void TerminalGraph::updateGraph(TransportationMode requestedMode)
 }
 
 Path TerminalGraph::convertEdgePathToTerminalPath(
-    const EdgePathInfoType &pathInfo, int pathId,
+    const EdgePathInfoType &pathInfo, int displayPathId,
     TransportationMode requestedMode, bool skipDelays) const
 {
     Path path;
-    path.pathId             = pathId;
+    path.pathId             = displayPathId;
     path.totalEdgeCosts     = 0;
     path.totalTerminalCosts = 0;
     path.totalPathCost      = 0;
-    path.costBreakdown      = QVariantMap();
-
-    // Initialize cost breakdown categories
-    QStringList costCategories = {
-        "carbonEmissions",   "cost",         "distance",
-        "energyConsumption", "risk",         "travelTime",
-        "terminal_delay",    "terminal_cost"};
-    for (const QString &category : costCategories)
-    {
-        path.costBreakdown[category] = 0.0;
-    }
+    path.rankingCost        = 0;
+    path.requestedMode      = static_cast<int>(requestedMode);
+    path.costBreakdown = QVariantMap{
+        {QStringLiteral("weighted_edge"),
+         QVariantMap{
+             {QStringLiteral("carbonEmissions"), 0.0},
+             {QStringLiteral("cost"), 0.0},
+             {QStringLiteral("distance"), 0.0},
+             {QStringLiteral("energyConsumption"), 0.0},
+             {QStringLiteral("risk"), 0.0},
+             {QStringLiteral("travelTime"), 0.0}}},
+        {QStringLiteral("weighted_terminal"),
+         QVariantMap{
+             {QStringLiteral("delay"), 0.0},
+             {QStringLiteral("direct_cost"), 0.0}}}
+    };
 
     // Extract edges from path
     const auto &edges = pathInfo.first;
@@ -1064,14 +1107,12 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
     }
 
     // Copy necessary data while holding the lock
-    QHash<EdgeIdentifier, QList<EdgeData>>          edgeDataCopy;
-    QHash<QString, Terminal *>                      terminalsCopy;
-    QHash<QString, TerminalDetails>                 terminalData;
+    QHash<EdgeIdentifier, QList<EdgeData>> edgeDataCopy;
+    QHash<QString, TerminalDetails>        terminalData;
 
     {
         QMutexLocker locker(&m_mutex);
         edgeDataCopy  = m_edgeData;
-        terminalsCopy = m_terminals;
         terminalData  = m_terminalData;
     }
 
@@ -1080,16 +1121,23 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
 
     // Add first terminal (source of first edge)
     QString firstTerminalName = edges[0].source();
+    path.startTerminal        = firstTerminalName;
+    path.endTerminal          = edges.back().target();
 
     double firstHandlingTime = terminalData[firstTerminalName].handlingTime;
     double firstCost         = terminalData[firstTerminalName].handlingCost;
 
     QVariantMap terminalInfo;
-    terminalInfo["terminal"]      = firstTerminalName;
+    terminalInfo["terminal"] = firstTerminalName;
+    terminalInfo["terminal_id"] = firstTerminalName;
+    terminalInfo["sequence_index"] = 0;
     terminalInfo["handling_time"] = firstHandlingTime;
-    terminalInfo["cost"]          = firstCost;
-    terminalInfo["costs_skipped"] =
-        true; // Origin terminal costs skipped by default
+    terminalInfo["cost"] = firstCost;
+    terminalInfo["costs_skipped"] = true;
+    terminalInfo["skip_reason"] = QStringLiteral("origin_terminal");
+    terminalInfo["weighted_terminal_delay_contribution"] = 0.0;
+    terminalInfo["weighted_terminal_cost_contribution"] = 0.0;
+    terminalInfo["weighted_terminal_total_contribution"] = 0.0;
 
     terminalsInPath.append(terminalInfo);
 
@@ -1112,7 +1160,7 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
         }
         if (i > 0)
         {
-            const auto        &prevEdge = edges[i + 1];
+            const auto        &prevEdge = edges[i - 1];
             TransportationMode prevMode = prevEdge.mode();
             skipPreviousTerminalCost    = (mode == prevMode);
         }
@@ -1156,67 +1204,150 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
         {
             skipPreviousTerminalCost = true;
         }
-        if (isEnd)
-        {
-            skipNextTerminalCost = true;
-        }
         // Create path segment
         PathSegment segment;
-        buildPathSegment(segment, isStart, isEnd, skipPreviousTerminalCost,
+        buildPathSegment(segment, static_cast<int>(i), isStart, isEnd,
+                         skipPreviousTerminalCost,
                          skipNextTerminalCost, fromName, toName, edgeData.mode,
                          edgeData.attributes);
         path.segments.append(segment);
 
-        // Add to total costs
-        path.totalEdgeCosts += segment.weight;
+        // Add to path-level weighted costs
+        path.totalEdgeCosts += segment.weightedEdgeCost;
+        path.rankingCost += segment.rankingCostContribution;
 
-        // Add cost breakdown
-        for (auto it = segment.estimatedCost.begin();
-             it != segment.estimatedCost.end(); ++it)
+        QVariantMap weightedEdge =
+            path.costBreakdown.value(QStringLiteral("weighted_edge")).toMap();
+        for (const QString &category : {QStringLiteral("carbonEmissions"),
+                                        QStringLiteral("cost"),
+                                        QStringLiteral("distance"),
+                                        QStringLiteral("energyConsumption"),
+                                        QStringLiteral("risk"),
+                                        QStringLiteral("travelTime")})
         {
-            QString category = it.key();
-            double  value    = it.value().toDouble();
-
-            if (path.costBreakdown.contains(category))
-            {
-                path.costBreakdown[category] =
-                    path.costBreakdown[category].toDouble() + value;
-            }
-            else
-            {
-                path.costBreakdown[category] = value;
-            }
+            weightedEdge[category] =
+                weightedEdge.value(category).toDouble()
+                + segment.estimatedCost.value(category).toDouble();
         }
+        path.costBreakdown[QStringLiteral("weighted_edge")] = weightedEdge;
 
         // Add destination terminal info
         double handlingTime = terminalData[toName].handlingTime;
         double cost         = terminalData[toName].handlingCost;
 
         QVariantMap terminalInfo;
-        terminalInfo["terminal"]      = toName;
+        terminalInfo["terminal"] = toName;
+        terminalInfo["terminal_id"] = toName;
+        terminalInfo["sequence_index"] = static_cast<int>(i) + 1;
         terminalInfo["handling_time"] = handlingTime;
-        terminalInfo["cost"]          = cost;
+        terminalInfo["cost"] = cost;
 
         // Determine if costs should be skipped
         bool skipCosts = false;
-        if (skipDelays && i > 0)
+        QString skipReason;
+        if (skipDelays && i < edges.size() - 1)
         {
-            // Skip costs if consecutive segments use the same mode
-            skipCosts = (path.segments[i].mode == path.segments[i - 1].mode);
+            // The terminal created on iteration i is the destination of edge i
+            // and the origin of edge i+1, so same-mode continuation is a
+            // forward-looking comparison.
+            skipCosts = (edges[i].mode() == edges[i + 1].mode());
+            if (skipCosts)
+            {
+                skipReason = QStringLiteral("same_mode_continuation");
+            }
         }
 
         terminalInfo["costs_skipped"] = skipCosts;
+        if (!skipReason.isEmpty())
+        {
+            terminalInfo["skip_reason"] = skipReason;
+        }
+        terminalInfo["weighted_terminal_delay_contribution"] = 0.0;
+        terminalInfo["weighted_terminal_cost_contribution"] = 0.0;
+        terminalInfo["weighted_terminal_total_contribution"] = 0.0;
         terminalsInPath.append(terminalInfo);
 
-        // Add terminal costs if not skipped
-        if (!skipCosts)
-        {
-            path.totalTerminalCosts += cost;
-        }
+        const double previousDelayShare =
+            estimatedCostValue(segment, "previousTerminalDelay");
+        const double previousCostShare =
+            estimatedCostValue(segment, "previousTerminalCost");
+        const double nextDelayShare =
+            estimatedCostValue(segment, "nextTerminalDelay");
+        const double nextCostShare =
+            estimatedCostValue(segment, "nextTerminalCost");
+
+        path.weightedTerminalDelayTotal += previousDelayShare + nextDelayShare;
+        path.weightedTerminalDirectCostTotal += previousCostShare
+                                                + nextCostShare;
+
+        QVariantMap previousTerminal = terminalsInPath[static_cast<int>(i)];
+        previousTerminal["weighted_terminal_delay_contribution"] =
+            previousTerminal
+                .value(QStringLiteral("weighted_terminal_delay_contribution"))
+                .toDouble()
+            + previousDelayShare;
+        previousTerminal["weighted_terminal_cost_contribution"] =
+            previousTerminal
+                .value(QStringLiteral("weighted_terminal_cost_contribution"))
+                .toDouble()
+            + previousCostShare;
+        previousTerminal["weighted_terminal_total_contribution"] =
+            previousTerminal
+                .value(QStringLiteral("weighted_terminal_delay_contribution"))
+                .toDouble()
+            + previousTerminal
+                .value(QStringLiteral("weighted_terminal_cost_contribution"))
+                .toDouble();
+        terminalsInPath[static_cast<int>(i)] = previousTerminal;
+
+        QVariantMap currentTerminal = terminalsInPath.back();
+        currentTerminal["weighted_terminal_delay_contribution"] =
+            currentTerminal
+                .value(QStringLiteral("weighted_terminal_delay_contribution"))
+                .toDouble()
+            + nextDelayShare;
+        currentTerminal["weighted_terminal_cost_contribution"] =
+            currentTerminal
+                .value(QStringLiteral("weighted_terminal_cost_contribution"))
+                .toDouble()
+            + nextCostShare;
+        currentTerminal["weighted_terminal_total_contribution"] =
+            currentTerminal
+                .value(QStringLiteral("weighted_terminal_delay_contribution"))
+                .toDouble()
+            + currentTerminal
+                .value(QStringLiteral("weighted_terminal_cost_contribution"))
+                .toDouble();
+        terminalsInPath.back() = currentTerminal;
     }
 
+    QVariantMap weightedTerminal =
+        path.costBreakdown.value(QStringLiteral("weighted_terminal")).toMap();
+    for (const QVariantMap &terminal : terminalsInPath)
+    {
+        const bool skipped =
+            terminal.value(QStringLiteral("costs_skipped")).toBool();
+        const double rawDelay =
+            terminal.value(QStringLiteral("handling_time")).toDouble();
+        const double rawCost =
+            terminal.value(QStringLiteral("cost")).toDouble();
+        if (!skipped)
+        {
+            path.rawTerminalDelayTotal += rawDelay;
+            path.rawTerminalCostTotal += rawCost;
+        }
+    }
+    weightedTerminal[QStringLiteral("delay")] =
+        path.weightedTerminalDelayTotal;
+    weightedTerminal[QStringLiteral("direct_cost")] =
+        path.weightedTerminalDirectCostTotal;
+    path.costBreakdown[QStringLiteral("weighted_terminal")] =
+        weightedTerminal;
+
     path.terminalsInPath = terminalsInPath;
-    path.totalPathCost   = path.totalEdgeCosts; // + path.totalTerminalCosts;
+    path.totalTerminalCosts = path.weightedTerminalDelayTotal
+                              + path.weightedTerminalDirectCostTotal;
+    path.totalPathCost = path.rankingCost;
 
     return path;
 }
@@ -1322,14 +1453,19 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
         }
     }
 
-    // Resort and reassign path IDs
+    // Resort and assign authoritative rank/display metadata after dedupe.
     std::sort(result.begin(), result.end(), [](const Path &a, const Path &b) {
-        return a.totalPathCost < b.totalPathCost;
+        return a.rankingCost < b.rankingCost;
     });
 
     for (int i = 0; i < result.size(); i++)
     {
+        result[i].rank = i;
         result[i].pathId = i + 1;
+        result[i].requestedMode = static_cast<int>(mode);
+        result[i].requestedTopN = n;
+        result[i].skipSameModeTerminalDelaysAndCosts = skipDelays;
+        result[i].pathUid = buildPathUid(result[i]);
     }
 
     qCDebug(lcTerminalGraph) << "Found" << result.size() << "paths from" << startCanonical
