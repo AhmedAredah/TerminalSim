@@ -401,6 +401,174 @@ void CommandProcessor::registerCommands()
         response["results"] = results;
         return response;
     });
+
+    registerCommand("get_terminals_runtime_state",
+                    [this](const QVariantMap &params) {
+        QVariantList terminalIds = params.value("terminal_ids").toList();
+        if (terminalIds.isEmpty())
+        {
+            throw std::invalid_argument(
+                "terminal_ids must be provided");
+        }
+
+        QJsonArray results;
+        for (const auto &terminalIdVar : terminalIds)
+        {
+            const QString terminalId = terminalIdVar.toString();
+            if (terminalId.isEmpty())
+                continue;
+
+            Terminal *terminal = m_graph->getTerminal(terminalId);
+            if (!terminal)
+            {
+                throw std::invalid_argument(
+                    QString("Terminal not found: %1")
+                        .arg(terminalId)
+                        .toStdString());
+            }
+
+            results.append(terminal->getRuntimeTerminalSnapshot());
+        }
+
+        QJsonObject response;
+        response["terminals_requested"] = terminalIds.size();
+        response["results"] = results;
+        return response;
+    });
+
+    registerCommand("get_terminals_runtime_projections",
+                    [this](const QVariantMap &params) {
+        QVariantList terminalIds = params.value("terminal_ids").toList();
+        if (terminalIds.isEmpty())
+        {
+            throw std::invalid_argument(
+                "terminal_ids must be provided");
+        }
+
+        QJsonArray results;
+        for (const auto &terminalIdVar : terminalIds)
+        {
+            const QString terminalId = terminalIdVar.toString();
+            if (terminalId.isEmpty())
+                continue;
+
+            Terminal *terminal = m_graph->getTerminal(terminalId);
+            if (!terminal)
+            {
+                throw std::invalid_argument(
+                    QString("Terminal not found: %1")
+                        .arg(terminalId)
+                        .toStdString());
+            }
+
+            results.append(terminal->getRuntimeTerminalProjectionsByMode());
+        }
+
+        QJsonObject response;
+        response["terminals_requested"] = terminalIds.size();
+        response["results"] = results;
+        return response;
+    });
+
+    registerCommand("get_terminal_execution_results",
+                    [this](const QVariantMap &params) {
+        const QString executionId =
+            params.value("execution_id").toString();
+        const QVariantList terminalIds =
+            params.value("terminal_ids").toList();
+        const QVariantList pathIdentityVars =
+            params.value("path_identities").toList();
+
+        QStringList pathIdentities;
+        for (const auto &pathIdentity : pathIdentityVars)
+        {
+            if (!pathIdentity.toString().isEmpty())
+                pathIdentities.append(pathIdentity.toString());
+        }
+
+        QStringList resolvedTerminalIds;
+        if (!terminalIds.isEmpty())
+        {
+            for (const auto &terminalIdVar : terminalIds)
+            {
+                if (!terminalIdVar.toString().isEmpty())
+                    resolvedTerminalIds.append(terminalIdVar.toString());
+            }
+        }
+        else
+        {
+            resolvedTerminalIds =
+                m_graph->getAllTerminalNames(false).keys();
+        }
+
+        QJsonArray results;
+        for (const auto &terminalId : resolvedTerminalIds)
+        {
+            Terminal *terminal = m_graph->getTerminal(terminalId);
+            if (!terminal)
+            {
+                throw std::invalid_argument(
+                    QString("Terminal not found: %1")
+                        .arg(terminalId)
+                        .toStdString());
+            }
+
+            const QJsonArray terminalResults =
+                terminal->getTerminalExecutionResults(
+                    executionId, pathIdentities);
+            for (const auto &value : terminalResults)
+                results.append(value);
+        }
+
+        QJsonObject response;
+        response["execution_id"] = executionId;
+        response["results"] = results;
+        return response;
+    });
+
+    registerCommand("clear_terminal_execution_results",
+                    [this](const QVariantMap &params) {
+        const QString executionId =
+            params.value("execution_id").toString();
+        const QVariantList terminalIds =
+            params.value("terminal_ids").toList();
+
+        QStringList resolvedTerminalIds;
+        if (!terminalIds.isEmpty())
+        {
+            for (const auto &terminalIdVar : terminalIds)
+            {
+                if (!terminalIdVar.toString().isEmpty())
+                    resolvedTerminalIds.append(terminalIdVar.toString());
+            }
+        }
+        else
+        {
+            resolvedTerminalIds =
+                m_graph->getAllTerminalNames(false).keys();
+        }
+
+        int cleared = 0;
+        for (const auto &terminalId : resolvedTerminalIds)
+        {
+            Terminal *terminal = m_graph->getTerminal(terminalId);
+            if (!terminal)
+            {
+                throw std::invalid_argument(
+                    QString("Terminal not found: %1")
+                        .arg(terminalId)
+                        .toStdString());
+            }
+            cleared += terminal->clearTerminalExecutionResults(
+                executionId);
+        }
+
+        QJsonObject response;
+        response["execution_id"] = executionId;
+        response["terminals_cleared"] = resolvedTerminalIds.size();
+        response["records_cleared"] = cleared;
+        return response;
+    });
 }
 
 void CommandProcessor::registerCommand(const QString &command,
@@ -596,11 +764,30 @@ QString CommandProcessor::determineEventName(const QString &command)
     {
         return "costFunctionUpdated";
     }
+    else if (command == "get_system_dynamics_state")
+    {
+        return "systemDynamicsState";
+    }
     else if (command == "update_system_dynamics"
-             || command == "get_system_dynamics_state"
              || command == "update_all_terminals_sd")
     {
         return "systemDynamicsUpdated";
+    }
+    else if (command == "get_terminals_runtime_state")
+    {
+        return "terminalRuntimeState";
+    }
+    else if (command == "get_terminals_runtime_projections")
+    {
+        return "terminalRuntimeProjections";
+    }
+    else if (command == "get_terminal_execution_results")
+    {
+        return "terminalExecutionResults";
+    }
+    else if (command == "clear_terminal_execution_results")
+    {
+        return "terminalExecutionResultsCleared";
     }
     else
     {

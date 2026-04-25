@@ -1,6 +1,7 @@
 #include "terminal.h"
 #include "dwell_time/container_dwell_time.h"
 
+#include <algorithm>
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -17,6 +18,132 @@
 #include "common/LogCategories.h"
 
 namespace TerminalSim {
+
+namespace
+{
+
+using NoHauler = ContainerCore::Container::HaulerType;
+
+QVariant customVariable(const ContainerCore::Container &container,
+                        const char                      *key)
+{
+    return container.getCustomVariable(NoHauler::noHauler,
+                                       QString::fromUtf8(key));
+}
+
+QString customVariableString(const ContainerCore::Container &container,
+                             const char                      *key)
+{
+    const QVariant value = customVariable(container, key);
+    return value.isValid() ? value.toString() : QString();
+}
+
+int customVariableInt(const ContainerCore::Container &container,
+                      const char                      *key,
+                      int                              defaultValue = -1)
+{
+    const QVariant value = customVariable(container, key);
+    bool           ok    = false;
+    const int      out   = value.toInt(&ok);
+    return ok ? out : defaultValue;
+}
+
+double expectedBaseDwellSeconds(const QString     &method,
+                                const QVariantMap &params)
+{
+    if (method.compare("gamma", Qt::CaseInsensitive) == 0)
+    {
+        return params.value("shape", 2.0).toDouble()
+               * params.value("scale", 24.0 * 3600.0).toDouble();
+    }
+    if (method.compare("exponential", Qt::CaseInsensitive) == 0)
+    {
+        return params.value("scale", 2.0 * 24.0 * 3600.0).toDouble();
+    }
+    if (method.compare("normal", Qt::CaseInsensitive) == 0)
+    {
+        return params.value("mean", 2.0 * 24.0 * 3600.0).toDouble();
+    }
+    if (method.compare("lognormal", Qt::CaseInsensitive) == 0)
+    {
+        const double mean =
+            params.value("mean", std::log(2.0 * 24.0 * 3600.0)).toDouble();
+        const double sigma = params.value("sigma", 0.25).toDouble();
+        return std::exp(mean + (sigma * sigma / 2.0));
+    }
+
+    return 2.0 * 24.0 * 3600.0;
+}
+
+} // namespace
+
+QJsonObject TerminalHandlingBatchRecord::toJson() const
+{
+    QJsonObject json;
+    json["execution_id"] = executionId;
+    json["path_identity"] = pathIdentity;
+    json["scenario_terminal_id"] = scenarioTerminalId;
+    json["runtime_terminal_id"] = runtimeTerminalId;
+    json["terminal_sequence_index"] = terminalSequenceIndex;
+    json["segment_index"] = segmentIndex;
+    json["vehicle_id"] = vehicleId;
+    json["vehicle_mode"] =
+        EnumUtils::transportationModeToString(vehicleMode);
+    json["event_type"] = eventType;
+    json["container_count"] = containerCount;
+    json["event_time"] = eventTime;
+    json["sum_yard_dwell_seconds"] = sumYardDwellSeconds;
+    json["sum_customs_delay_seconds"] = sumCustomsDelaySeconds;
+    json["customs_applied_count"] = customsAppliedCount;
+    json["sum_arrival_penalty_seconds"] = sumArrivalPenaltySeconds;
+    json["sum_total_handling_seconds"] = sumTotalHandlingSeconds;
+    json["sum_direct_cost_usd"] = sumDirectCostUsd;
+    json["state_snapshot_before"] = stateSnapshotBefore;
+    json["state_snapshot_after"] = stateSnapshotAfter;
+
+    QJsonArray ids;
+    for (const auto &id : containerIds)
+        ids.append(id);
+    json["container_ids"] = ids;
+    return json;
+}
+
+QJsonObject TerminalExecutionResult::toJson() const
+{
+    QJsonObject json;
+    json["execution_id"] = executionId;
+    json["path_identity"] = pathIdentity;
+    json["scenario_terminal_id"] = scenarioTerminalId;
+    json["runtime_terminal_id"] = runtimeTerminalId;
+    json["terminal_sequence_index"] = terminalSequenceIndex;
+    json["total_dropped_containers"] = totalDroppedContainers;
+    json["total_picked_containers"] = totalPickedContainers;
+    json["arrival_events"] = arrivalEvents;
+    json["pickup_events"] = pickupEvents;
+    json["actual_yard_dwell_seconds"] = actualYardDwellSeconds;
+    json["actual_customs_delay_seconds"] = actualCustomsDelaySeconds;
+    json["customs_applied_count"] = customsAppliedCount;
+    json["actual_arrival_penalty_seconds"] = actualArrivalPenaltySeconds;
+    json["actual_total_handling_seconds"] = actualTotalHandlingSeconds;
+    json["actual_direct_cost_usd"] = actualDirectCostUsd;
+    json["first_arrival_state_snapshot"] = firstArrivalStateSnapshot;
+    json["last_departure_state_snapshot"] = lastDepartureStateSnapshot;
+    json["raw_batch_records"] = rawBatchRecords;
+    return json;
+}
+
+bool Terminal::HandlingMetadata::isValid() const
+{
+    return !executionId.isEmpty() && !pathIdentity.isEmpty()
+        && !scenarioTerminalId.isEmpty();
+}
+
+QString Terminal::HandlingMetadata::groupingKey() const
+{
+    return executionId + "|" + pathIdentity + "|"
+        + scenarioTerminalId + "|" + runtimeTerminalId + "|"
+        + QString::number(terminalSequenceIndex);
+}
 
 Terminal::Terminal(
     const QString &terminalName, const QString &displayName,
@@ -353,161 +480,14 @@ void Terminal::addContainer(const ContainerCore::Container& container,
                             TransportationMode arrivalMode)
 {
     QMutexLocker locker(&m_mutex);
-
-    // Check capacity (use internal variant — we already hold m_mutex)
-    QPair<bool, QString> capacityStatus = checkCapacityStatusInternal(1);
-    if (!capacityStatus.first) {
-        qCWarning(lcTerminal) << "Cannot add container to terminal"
-                             << m_terminalName
-                             << ":" << capacityStatus.second;
-        throw std::runtime_error(QString("Cannot add container: %1")
-                                     .arg(capacityStatus.second).toStdString());
-    }
-
-    if (capacityStatus.second.startsWith("Warning")) {
-        qCWarning(lcTerminal) << "Terminal" << m_terminalName
-                              << ":" << capacityStatus.second;
-    }
-
-    // Create a copy of the container to modify
-    ContainerCore::Container* containerCopy = container.copy();
-    
-    // Handle the case when addingTime is not specified
-    double baseAddingTime = (addingTime < 0) ? 0.0 : addingTime;
-    double baseDeparture = baseAddingTime;
-    bool customsApplied = false;
-    
-    if (addingTime >= 0) {
-        // === STEP 1: Yard dwell time (congestion-scaled) ===
-        double yardDwell = 0.0;
-        if (!m_dwellTimeMethod.isEmpty() && !m_dwellTimeParameters.isEmpty()) {
-            double rawDeparture = ContainerDwellTime::getDepartureTime(
-                baseAddingTime,
-                m_dwellTimeMethod,
-                m_dwellTimeParameters
-                );
-            yardDwell = rawDeparture - baseAddingTime;
-        }
-
-        // Apply mode-specific congestion multiplier to yard dwell ONLY
-        if (m_sdParams.enabled) {
-            double yardMultiplier = calculateDelayMultiplier(
-                m_sdState.utilization, arrivalMode);
-            if (yardMultiplier > 1.0) {
-                double originalDwell = yardDwell;
-                yardDwell *= yardMultiplier;
-
-                qCDebug(lcTerminal) << "Yard dwell congestion applied to container"
-                                   << containerCopy->getContainerID()
-                                   << ": mode="
-                                   << EnumUtils::transportationModeToString(arrivalMode)
-                                   << "M_k=" << yardMultiplier
-                                   << "yard dwell adjusted from" << originalDwell
-                                   << "to" << yardDwell;
-            }
-        }
-
-        baseDeparture = baseAddingTime + yardDwell;
-
-        // === STEP 2: Customs delay (independent of congestion) ===
-        if (m_customsProbability > 0.0 && m_customsDelayMean > 0.0) {
-            if (QRandomGenerator::global()->generateDouble() <
-                m_customsProbability) {
-                double stdDev = (m_customsDelayVariance > 0.0) ?
-                                    std::sqrt(m_customsDelayVariance) : 1.0;
-                double customsDelay = 0.0;
-                {
-                    std::normal_distribution<double>
-                        normalDist(m_customsDelayMean, stdDev);
-                    std::mt19937
-                        generator(QRandomGenerator::global()->generate());
-                    customsDelay = qMax(0.0, normalDist(generator));
-                }
-
-                baseDeparture += customsDelay; // customsDelay is already seconds
-                customsApplied = true;
-
-                qCDebug(lcTerminal) << "Container"
-                                   << containerCopy->getContainerID()
-                                   << "selected for customs inspection. Delay:"
-                                   << customsDelay << "seconds (not congestion-scaled)";
-            }
-        }
-
-        // === STEP 3: Arrival-side mode-specific penalty ===
-        if (m_sdParams.enabled && m_sdState.utilization > m_sdParams.criticalUtilization) {
-            double arrivalPenalty = calculateArrivalPenalty(
-                m_sdState.utilization, arrivalMode);
-            if (arrivalPenalty > 0.0) {
-                baseDeparture += arrivalPenalty;
-
-                qCDebug(lcTerminal) << "Arrival-side penalty applied to container"
-                                   << containerCopy->getContainerID()
-                                   << ": mode="
-                                   << EnumUtils::transportationModeToString(arrivalMode)
-                                   << "penalty=" << arrivalPenalty / 3600.0 << "hours";
-            }
-        }
-    }
-
-    // Track arrival for System Dynamics
-    if (m_sdParams.enabled) {
-        m_sdState.arrivalsThisStep++;
-    }
-
-    // 5. Calculate total cost for the container (internal — we hold m_mutex)
-    double containerCost =
-        estimateContainerCostInternal(containerCopy, customsApplied);
-    QVariant costSoFar =
-        containerCopy->getCustomVariable(
-            ContainerCore::Container::HaulerType::noHauler,
-            "cost");
-
-    double totalCost = containerCost;
-    if (costSoFar.isValid() && !costSoFar.toString().isEmpty()) {
-        bool ok;
-        double previousCost = costSoFar.toDouble(&ok);
-        if (ok) {
-            totalCost += previousCost;
-        }
-    }
-
-    containerCopy->addCustomVariable(
-        ContainerCore::Container::HaulerType::noHauler,
-        "cost",
-        totalCost);
-
-    // 6. Accumulate total time for the container
-    QVariant timeSoFar =
-        containerCopy->getCustomVariable(
-            ContainerCore::Container::HaulerType::noHauler,
-            "time");
-    
-    double totalTime = baseDeparture - baseAddingTime;
-    if (timeSoFar.isValid() && !timeSoFar.toString().isEmpty()) {
-        bool ok;
-        double previousTime = timeSoFar.toDouble(&ok);
-        if (ok) {
-            totalTime += previousTime;
-        }
-    }
-    
-    containerCopy->addCustomVariable(
-        ContainerCore::Container::HaulerType::noHauler,
-        "time",
-        totalTime);
-
-    // 7. Set container location
-    containerCopy->setContainerCurrentLocation(m_terminalName);
-
-    // 8. Add to storage
-    m_storage->addContainer(containerCopy->getContainerID(),
-                            containerCopy, baseAddingTime, baseDeparture);
-    
-    qCDebug(lcTerminal) << "Container" << containerCopy->getContainerID()
-                       << "added to terminal" << m_terminalName
-                       << "with arrival time:" << baseAddingTime
-                       << "and estimated departure:" << baseDeparture;
+    const QJsonObject before = runtimeTerminalSnapshotLocked();
+    const HandlingMetadata metadata =
+        extractHandlingMetadataLocked(container, arrivalMode);
+    const auto outcome = handleContainerArrivalLocked(
+        container, addingTime, arrivalMode);
+    recordHandlingBatchLocked(metadata, QList<ContainerHandlingOutcome>{outcome}, before,
+                              runtimeTerminalSnapshotLocked(),
+                              QStringLiteral("arrival_dropoff"));
 }
 
 void
@@ -536,13 +516,31 @@ Terminal::addContainers(const QVector<ContainerCore::Container>& containers,
                               << ":" << capacityStatus.second;
     }
 
-    // Add each container individually
-    // Must release mutex to prevent deadlock during
-    // nested lock acquisition in addContainer
-    locker.unlock();
-    
+    const QJsonObject stateSnapshotBefore =
+        runtimeTerminalSnapshotLocked();
+
+    QHash<QString, HandlingMetadata> groupedMetadata;
+    QHash<QString, QList<ContainerHandlingOutcome>> groupedOutcomes;
+
     for (const ContainerCore::Container& container : containers) {
-        addContainer(container, addingTime, arrivalMode);
+        const HandlingMetadata metadata =
+            extractHandlingMetadataLocked(container, arrivalMode);
+        const QString key = metadata.groupingKey();
+        if (!groupedMetadata.contains(key))
+            groupedMetadata.insert(key, metadata);
+        groupedOutcomes[key].append(handleContainerArrivalLocked(
+            container, addingTime, arrivalMode));
+    }
+
+    const QJsonObject stateSnapshotAfter =
+        runtimeTerminalSnapshotLocked();
+    for (auto it = groupedOutcomes.constBegin();
+         it != groupedOutcomes.constEnd(); ++it) {
+        recordHandlingBatchLocked(groupedMetadata.value(it.key()),
+                                  it.value(),
+                                  stateSnapshotBefore,
+                                  stateSnapshotAfter,
+                                  QStringLiteral("arrival_dropoff"));
     }
 }
 
@@ -1230,6 +1228,410 @@ double Terminal::calculateArrivalPenalty(double utilization,
     return basePenalty * congestion;
 }
 
+QJsonObject Terminal::runtimeTerminalProjectionLocked(
+    TransportationMode mode) const
+{
+    QJsonObject projection;
+    projection["terminal_id"] = m_terminalName;
+    projection["mode"] =
+        EnumUtils::transportationModeToString(mode);
+
+    const double baseDwellSeconds =
+        expectedBaseDwellSeconds(m_dwellTimeMethod, m_dwellTimeParameters);
+    const double delayMultiplier =
+        calculateDelayMultiplier(m_sdState.utilization, mode);
+    const double expectedYardDwellSeconds =
+        baseDwellSeconds * delayMultiplier;
+    const double expectedCustomsDelaySeconds =
+        m_customsProbability * m_customsDelayMean;
+    const double expectedArrivalPenaltySeconds =
+        calculateArrivalPenalty(m_sdState.utilization, mode);
+    const double expectedDirectCostUsd =
+        m_fixedCost + (m_customsProbability * m_customsCost);
+
+    projection["base_dwell_seconds"] = baseDwellSeconds;
+    projection["delay_multiplier"] = delayMultiplier;
+    projection["expected_yard_dwell_seconds"] =
+        expectedYardDwellSeconds;
+    projection["expected_customs_delay_seconds"] =
+        expectedCustomsDelaySeconds;
+    projection["expected_arrival_penalty_seconds"] =
+        expectedArrivalPenaltySeconds;
+    projection["expected_total_handling_seconds"] =
+        expectedYardDwellSeconds + expectedCustomsDelaySeconds
+        + expectedArrivalPenaltySeconds;
+    projection["expected_direct_cost_usd"] =
+        expectedDirectCostUsd;
+    projection["customs_probability"] = m_customsProbability;
+    return projection;
+}
+
+QJsonObject Terminal::runtimeTerminalSnapshotLocked() const
+{
+    QJsonObject state;
+    state["terminal_id"] = m_terminalName;
+    state["display_name"] = m_displayName;
+
+    // Parameters
+    QJsonObject params;
+    params["enabled"] = m_sdParams.enabled;
+    params["critical_utilization"] = m_sdParams.criticalUtilization;
+    params["congestion_exponent"] = m_sdParams.congestionExponent;
+    params["congestion_sensitivity"] = m_sdParams.congestionSensitivity;
+    params["delay_sensitivity"] = m_sdParams.delaySensitivity;
+    params["max_service_rate"] = m_sdParams.maxServiceRate;
+
+    QJsonObject modeParams;
+    modeParams["ship"] = QJsonObject{
+        {"alpha", m_sdParams.shipDelay.alpha},
+        {"beta", m_sdParams.shipDelay.beta}};
+    modeParams["truck"] = QJsonObject{
+        {"alpha", m_sdParams.truckDelay.alpha},
+        {"beta", m_sdParams.truckDelay.beta}};
+    modeParams["train"] = QJsonObject{
+        {"alpha", m_sdParams.trainDelay.alpha},
+        {"beta", m_sdParams.trainDelay.beta}};
+    params["mode_delay_params"] = modeParams;
+
+    params["arrival_penalties"] = QJsonObject{
+        {"ship", m_sdParams.shipArrivalPenalty},
+        {"truck", m_sdParams.truckArrivalPenalty},
+        {"train", m_sdParams.trainArrivalPenalty}};
+    state["parameters"] = params;
+
+    QJsonObject currentState;
+    currentState["utilization"] = m_sdState.utilization;
+    currentState["congestion"] = m_sdState.congestion;
+    currentState["service_capacity"] = m_sdState.serviceCapacity;
+    currentState["delay_multiplier"] = m_sdState.delayMultiplier;
+    currentState["arrivals_this_step"] = m_sdState.arrivalsThisStep;
+    currentState["departures_this_step"] = m_sdState.departuresThisStep;
+    currentState["last_update_time"] = m_sdState.lastUpdateTime;
+    currentState["delta_t"] = m_sdState.deltaT;
+    currentState["mode_delay_multipliers"] = QJsonObject{
+        {"ship", calculateDelayMultiplier(
+                     m_sdState.utilization, TransportationMode::Ship)},
+        {"truck", calculateDelayMultiplier(
+                      m_sdState.utilization, TransportationMode::Truck)},
+        {"train", calculateDelayMultiplier(
+                      m_sdState.utilization, TransportationMode::Train)}};
+    state["state"] = currentState;
+
+    state["remaining_service_capacity"] = getRemainingServiceCapacity();
+    state["container_count"] = m_storage ? m_storage->size() : 0;
+    state["max_capacity"] = m_maxCapacity;
+    return state;
+}
+
+Terminal::HandlingMetadata Terminal::extractHandlingMetadataLocked(
+    const ContainerCore::Container &container,
+    TransportationMode              arrivalMode) const
+{
+    HandlingMetadata metadata;
+    metadata.executionId =
+        customVariableString(container, "execution_id");
+    metadata.pathIdentity =
+        customVariableString(container, "path_identity");
+    metadata.scenarioTerminalId =
+        customVariableString(container, "scenario_terminal_id");
+    metadata.runtimeTerminalId =
+        customVariableString(container, "runtime_terminal_id");
+    metadata.terminalSequenceIndex =
+        customVariableInt(container, "terminal_sequence_index");
+    metadata.segmentIndex =
+        customVariableInt(container, "segment_index");
+    metadata.vehicleId =
+        customVariableString(container, "vehicle_id");
+
+    const QString vehicleMode =
+        customVariableString(container, "vehicle_mode");
+    metadata.vehicleMode = vehicleMode.isEmpty()
+        ? arrivalMode
+        : EnumUtils::stringToTransportationMode(vehicleMode);
+
+    if (metadata.runtimeTerminalId.isEmpty())
+        metadata.runtimeTerminalId = m_terminalName;
+    return metadata;
+}
+
+Terminal::ContainerHandlingOutcome Terminal::handleContainerArrivalLocked(
+    const ContainerCore::Container &container,
+    double                          addingTime,
+    TransportationMode              arrivalMode)
+{
+    // Caller must hold m_mutex.
+    QPair<bool, QString> capacityStatus =
+        checkCapacityStatusInternal(1);
+    if (!capacityStatus.first) {
+        qCWarning(lcTerminal) << "Cannot add container to terminal"
+                              << m_terminalName
+                              << ":" << capacityStatus.second;
+        throw std::runtime_error(QString("Cannot add container: %1")
+                                     .arg(capacityStatus.second).toStdString());
+    }
+
+    if (capacityStatus.second.startsWith("Warning")) {
+        qCWarning(lcTerminal) << "Terminal" << m_terminalName
+                              << ":" << capacityStatus.second;
+    }
+
+    ContainerHandlingOutcome outcome;
+    ContainerCore::Container *containerCopy = container.copy();
+    outcome.containerId = containerCopy->getContainerID();
+    outcome.baseAddingTime = (addingTime < 0) ? 0.0 : addingTime;
+    outcome.baseDeparture = outcome.baseAddingTime;
+
+    if (addingTime >= 0) {
+        if (!m_dwellTimeMethod.isEmpty() && !m_dwellTimeParameters.isEmpty()) {
+            const double rawDeparture =
+                ContainerDwellTime::getDepartureTime(
+                    outcome.baseAddingTime,
+                    m_dwellTimeMethod,
+                    m_dwellTimeParameters);
+            outcome.yardDwellSeconds =
+                rawDeparture - outcome.baseAddingTime;
+        }
+
+        if (m_sdParams.enabled) {
+            const double yardMultiplier = calculateDelayMultiplier(
+                m_sdState.utilization, arrivalMode);
+            if (yardMultiplier > 1.0) {
+                const double originalDwell =
+                    outcome.yardDwellSeconds;
+                outcome.yardDwellSeconds *= yardMultiplier;
+
+                qCDebug(lcTerminal)
+                    << "Yard dwell congestion applied to container"
+                    << containerCopy->getContainerID()
+                    << ": mode="
+                    << EnumUtils::transportationModeToString(arrivalMode)
+                    << "M_k=" << yardMultiplier
+                    << "yard dwell adjusted from" << originalDwell
+                    << "to" << outcome.yardDwellSeconds;
+            }
+        }
+
+        outcome.baseDeparture =
+            outcome.baseAddingTime + outcome.yardDwellSeconds;
+
+        if (m_customsProbability > 0.0 && m_customsDelayMean > 0.0) {
+            if (QRandomGenerator::global()->generateDouble()
+                < m_customsProbability) {
+                const double stdDev = (m_customsDelayVariance > 0.0)
+                    ? std::sqrt(m_customsDelayVariance)
+                    : 1.0;
+                std::normal_distribution<double> normalDist(
+                    m_customsDelayMean, stdDev);
+                std::mt19937 generator(
+                    QRandomGenerator::global()->generate());
+                outcome.customsDelaySeconds =
+                    qMax(0.0, normalDist(generator));
+                outcome.baseDeparture +=
+                    outcome.customsDelaySeconds;
+                outcome.customsApplied = true;
+
+                qCDebug(lcTerminal)
+                    << "Container"
+                    << containerCopy->getContainerID()
+                    << "selected for customs inspection. Delay:"
+                    << outcome.customsDelaySeconds
+                    << "seconds (not congestion-scaled)";
+            }
+        }
+
+        if (m_sdParams.enabled
+            && m_sdState.utilization > m_sdParams.criticalUtilization) {
+            outcome.arrivalPenaltySeconds =
+                calculateArrivalPenalty(m_sdState.utilization, arrivalMode);
+            if (outcome.arrivalPenaltySeconds > 0.0) {
+                outcome.baseDeparture +=
+                    outcome.arrivalPenaltySeconds;
+                qCDebug(lcTerminal)
+                    << "Arrival-side penalty applied to container"
+                    << containerCopy->getContainerID()
+                    << ": mode="
+                    << EnumUtils::transportationModeToString(arrivalMode)
+                    << "penalty="
+                    << outcome.arrivalPenaltySeconds / 3600.0
+                    << "hours";
+            }
+        }
+    }
+
+    if (m_sdParams.enabled) {
+        m_sdState.arrivalsThisStep++;
+    }
+
+    outcome.directCostUsd = estimateContainerCostInternal(
+        containerCopy, outcome.customsApplied);
+
+    const QVariant costSoFar = containerCopy->getCustomVariable(
+        NoHauler::noHauler, "cost");
+    double totalCost = outcome.directCostUsd;
+    if (costSoFar.isValid() && !costSoFar.toString().isEmpty()) {
+        bool ok = false;
+        const double previousCost = costSoFar.toDouble(&ok);
+        if (ok)
+            totalCost += previousCost;
+    }
+    containerCopy->addCustomVariable(
+        NoHauler::noHauler, "cost", totalCost);
+
+    outcome.totalHandlingSeconds =
+        outcome.baseDeparture - outcome.baseAddingTime;
+    const QVariant timeSoFar = containerCopy->getCustomVariable(
+        NoHauler::noHauler, "time");
+    double totalTime = outcome.totalHandlingSeconds;
+    if (timeSoFar.isValid() && !timeSoFar.toString().isEmpty()) {
+        bool ok = false;
+        const double previousTime = timeSoFar.toDouble(&ok);
+        if (ok)
+            totalTime += previousTime;
+    }
+    containerCopy->addCustomVariable(
+        NoHauler::noHauler, "time", totalTime);
+    containerCopy->setContainerCurrentLocation(m_terminalName);
+    m_storage->addContainer(containerCopy->getContainerID(),
+                            containerCopy,
+                            outcome.baseAddingTime,
+                            outcome.baseDeparture);
+
+    qCDebug(lcTerminal) << "Container" << containerCopy->getContainerID()
+                        << "added to terminal" << m_terminalName
+                        << "with arrival time:" << outcome.baseAddingTime
+                        << "and estimated departure:"
+                        << outcome.baseDeparture;
+    return outcome;
+}
+
+void Terminal::recordHandlingBatchLocked(
+    const HandlingMetadata                &metadata,
+    const QList<ContainerHandlingOutcome> &outcomes,
+    const QJsonObject                     &stateSnapshotBefore,
+    const QJsonObject                     &stateSnapshotAfter,
+    const QString                         &eventType)
+{
+    if (!metadata.isValid() || outcomes.isEmpty())
+        return;
+
+    TerminalHandlingBatchRecord batch;
+    batch.executionId = metadata.executionId;
+    batch.pathIdentity = metadata.pathIdentity;
+    batch.scenarioTerminalId = metadata.scenarioTerminalId;
+    batch.runtimeTerminalId = metadata.runtimeTerminalId;
+    batch.terminalSequenceIndex = metadata.terminalSequenceIndex;
+    batch.segmentIndex = metadata.segmentIndex;
+    batch.vehicleId = metadata.vehicleId;
+    batch.vehicleMode = metadata.vehicleMode;
+    batch.eventType = eventType;
+    batch.stateSnapshotBefore = stateSnapshotBefore;
+    batch.stateSnapshotAfter = stateSnapshotAfter;
+
+    for (const auto &outcome : outcomes) {
+        batch.containerCount += 1;
+        batch.eventTime = qMax(batch.eventTime, outcome.baseAddingTime);
+        batch.sumYardDwellSeconds += outcome.yardDwellSeconds;
+        batch.sumCustomsDelaySeconds += outcome.customsDelaySeconds;
+        batch.customsAppliedCount += outcome.customsApplied ? 1 : 0;
+        batch.sumArrivalPenaltySeconds += outcome.arrivalPenaltySeconds;
+        batch.sumTotalHandlingSeconds += outcome.totalHandlingSeconds;
+        batch.sumDirectCostUsd += outcome.directCostUsd;
+        batch.containerIds.append(outcome.containerId);
+    }
+
+    m_handlingBatchRecordsByExecution[metadata.executionId].append(batch);
+}
+
+QList<TerminalExecutionResult> Terminal::terminalExecutionResultsLocked(
+    const QString     &executionId,
+    const QStringList &pathIdentities) const
+{
+    const QSet<QString> pathIdentityFilter(
+        pathIdentities.cbegin(), pathIdentities.cend());
+
+    auto appendRecords = [&](const QList<TerminalHandlingBatchRecord> &records,
+                             QList<TerminalHandlingBatchRecord>       &dest) {
+        for (const auto &record : records) {
+            if (!pathIdentityFilter.isEmpty()
+                && !pathIdentityFilter.contains(record.pathIdentity)) {
+                continue;
+            }
+            dest.append(record);
+        }
+    };
+
+    QList<TerminalHandlingBatchRecord> selected;
+    if (!executionId.isEmpty()) {
+        appendRecords(m_handlingBatchRecordsByExecution.value(executionId),
+                      selected);
+    } else {
+        for (auto it = m_handlingBatchRecordsByExecution.constBegin();
+             it != m_handlingBatchRecordsByExecution.constEnd(); ++it) {
+            appendRecords(it.value(), selected);
+        }
+    }
+
+    QHash<QString, TerminalExecutionResult> grouped;
+    QList<QString> order;
+    for (const auto &record : selected) {
+        const QString key = record.executionId + "|" + record.pathIdentity
+            + "|" + record.scenarioTerminalId + "|"
+            + record.runtimeTerminalId + "|"
+            + QString::number(record.terminalSequenceIndex);
+
+        if (!grouped.contains(key)) {
+            TerminalExecutionResult result;
+            result.executionId = record.executionId;
+            result.pathIdentity = record.pathIdentity;
+            result.scenarioTerminalId = record.scenarioTerminalId;
+            result.runtimeTerminalId = record.runtimeTerminalId;
+            result.terminalSequenceIndex = record.terminalSequenceIndex;
+            grouped.insert(key, result);
+            order.append(key);
+        }
+
+        auto &result = grouped[key];
+        if (record.eventType == QStringLiteral("arrival_dropoff")) {
+            result.totalDroppedContainers += record.containerCount;
+            result.arrivalEvents += 1;
+            if (result.firstArrivalStateSnapshot.isEmpty())
+                result.firstArrivalStateSnapshot = record.stateSnapshotBefore;
+        } else if (record.eventType == QStringLiteral("pickup_departure")) {
+            result.totalPickedContainers += record.containerCount;
+            result.pickupEvents += 1;
+            result.lastDepartureStateSnapshot = record.stateSnapshotAfter;
+        }
+
+        result.actualYardDwellSeconds += record.sumYardDwellSeconds;
+        result.actualCustomsDelaySeconds += record.sumCustomsDelaySeconds;
+        result.customsAppliedCount += record.customsAppliedCount;
+        result.actualArrivalPenaltySeconds +=
+            record.sumArrivalPenaltySeconds;
+        result.actualTotalHandlingSeconds +=
+            record.sumTotalHandlingSeconds;
+        result.actualDirectCostUsd += record.sumDirectCostUsd;
+        result.rawBatchRecords.append(record.toJson());
+    }
+
+    QList<TerminalExecutionResult> results;
+    results.reserve(order.size());
+    for (const auto &key : order)
+        results.append(grouped.value(key));
+
+    std::sort(results.begin(), results.end(),
+              [](const TerminalExecutionResult &lhs,
+                 const TerminalExecutionResult &rhs) {
+                  if (lhs.executionId != rhs.executionId)
+                      return lhs.executionId < rhs.executionId;
+                  if (lhs.pathIdentity != rhs.pathIdentity)
+                      return lhs.pathIdentity < rhs.pathIdentity;
+                  if (lhs.terminalSequenceIndex != rhs.terminalSequenceIndex)
+                      return lhs.terminalSequenceIndex < rhs.terminalSequenceIndex;
+                  return lhs.runtimeTerminalId < rhs.runtimeTerminalId;
+              });
+    return results;
+}
+
 void Terminal::updateSystemDynamics(double currentTime, double deltaT)
 {
     QMutexLocker locker(&m_mutex);
@@ -1280,75 +1682,67 @@ void Terminal::updateSystemDynamics(double currentTime, double deltaT)
 QJsonObject Terminal::getSystemDynamicsState() const
 {
     QMutexLocker locker(&m_mutex);
+    return runtimeTerminalSnapshotLocked();
+}
 
-    QJsonObject state;
+QJsonObject Terminal::getRuntimeTerminalSnapshot() const
+{
+    QMutexLocker locker(&m_mutex);
+    return runtimeTerminalSnapshotLocked();
+}
 
-    // Parameters
-    QJsonObject params;
-    params["enabled"] = m_sdParams.enabled;
-    params["critical_utilization"] = m_sdParams.criticalUtilization;
-    params["congestion_exponent"] = m_sdParams.congestionExponent;
-    params["congestion_sensitivity"] = m_sdParams.congestionSensitivity;
-    params["delay_sensitivity"] = m_sdParams.delaySensitivity;
-    params["max_service_rate"] = m_sdParams.maxServiceRate;
+QJsonObject Terminal::getRuntimeTerminalProjection(
+    TransportationMode mode) const
+{
+    QMutexLocker locker(&m_mutex);
+    return runtimeTerminalProjectionLocked(mode);
+}
 
-    // Mode-specific delay parameters
-    QJsonObject modeParams;
-    QJsonObject shipParams;
-    shipParams["alpha"] = m_sdParams.shipDelay.alpha;
-    shipParams["beta"] = m_sdParams.shipDelay.beta;
-    modeParams["ship"] = shipParams;
+QJsonObject Terminal::getRuntimeTerminalProjectionsByMode() const
+{
+    QMutexLocker locker(&m_mutex);
+    QJsonObject projections;
+    projections["terminal_id"] = m_terminalName;
+    projections["ship"] = runtimeTerminalProjectionLocked(
+        TransportationMode::Ship);
+    projections["truck"] = runtimeTerminalProjectionLocked(
+        TransportationMode::Truck);
+    projections["train"] = runtimeTerminalProjectionLocked(
+        TransportationMode::Train);
+    return projections;
+}
 
-    QJsonObject truckParams;
-    truckParams["alpha"] = m_sdParams.truckDelay.alpha;
-    truckParams["beta"] = m_sdParams.truckDelay.beta;
-    modeParams["truck"] = truckParams;
+QJsonArray Terminal::getTerminalExecutionResults(
+    const QString     &executionId,
+    const QStringList &pathIdentities) const
+{
+    QMutexLocker locker(&m_mutex);
+    QJsonArray   results;
+    for (const auto &result :
+         terminalExecutionResultsLocked(executionId, pathIdentities)) {
+        results.append(result.toJson());
+    }
+    return results;
+}
 
-    QJsonObject trainParams;
-    trainParams["alpha"] = m_sdParams.trainDelay.alpha;
-    trainParams["beta"] = m_sdParams.trainDelay.beta;
-    modeParams["train"] = trainParams;
+int Terminal::clearTerminalExecutionResults(
+    const QString &executionId)
+{
+    QMutexLocker locker(&m_mutex);
+    if (executionId.isEmpty()) {
+        int cleared = 0;
+        for (auto it = m_handlingBatchRecordsByExecution.constBegin();
+             it != m_handlingBatchRecordsByExecution.constEnd(); ++it) {
+            cleared += it.value().size();
+        }
+        m_handlingBatchRecordsByExecution.clear();
+        return cleared;
+    }
 
-    params["mode_delay_params"] = modeParams;
-
-    // Arrival penalty parameters
-    QJsonObject arrivalPenalties;
-    arrivalPenalties["ship"] = m_sdParams.shipArrivalPenalty;
-    arrivalPenalties["truck"] = m_sdParams.truckArrivalPenalty;
-    arrivalPenalties["train"] = m_sdParams.trainArrivalPenalty;
-    params["arrival_penalties"] = arrivalPenalties;
-
-    state["parameters"] = params;
-
-    // Current state
-    QJsonObject currentState;
-    currentState["utilization"] = m_sdState.utilization;
-    currentState["congestion"] = m_sdState.congestion;
-    currentState["service_capacity"] = m_sdState.serviceCapacity;
-    currentState["delay_multiplier"] = m_sdState.delayMultiplier;
-    currentState["arrivals_this_step"] = m_sdState.arrivalsThisStep;
-    currentState["departures_this_step"] = m_sdState.departuresThisStep;
-    currentState["last_update_time"] = m_sdState.lastUpdateTime;
-    currentState["delta_t"] = m_sdState.deltaT;
-
-    // Mode-specific delay multipliers at current utilization
-    QJsonObject modeMultipliers;
-    modeMultipliers["ship"] = calculateDelayMultiplier(
-        m_sdState.utilization, TransportationMode::Ship);
-    modeMultipliers["truck"] = calculateDelayMultiplier(
-        m_sdState.utilization, TransportationMode::Truck);
-    modeMultipliers["train"] = calculateDelayMultiplier(
-        m_sdState.utilization, TransportationMode::Train);
-    currentState["mode_delay_multipliers"] = modeMultipliers;
-
-    state["state"] = currentState;
-
-    // Derived values
-    state["remaining_service_capacity"] = getRemainingServiceCapacity();
-    state["container_count"] = m_storage ? m_storage->size() : 0;
-    state["max_capacity"] = m_maxCapacity;
-
-    return state;
+    const int cleared =
+        m_handlingBatchRecordsByExecution.value(executionId).size();
+    m_handlingBatchRecordsByExecution.remove(executionId);
+    return cleared;
 }
 
 double Terminal::getDelayMultiplier(TransportationMode mode) const

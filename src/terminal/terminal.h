@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QHash>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QMap>
 #include <QMutex>
@@ -7,6 +9,7 @@
 #include <QPair>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QVariantMap>
 
 #include <containerLib/container.h>
@@ -78,6 +81,56 @@ struct SystemDynamicsState
     int    departuresThisStep = 0;  ///< N_k^srv: departures in current time step
     double lastUpdateTime    = 0.0;    ///< Last SD update timestamp (seconds). Same scale as currentTime parameter.
     double deltaT            = 3600.0; ///< Current time step duration (seconds). Default 3600.0 = 1 hour.
+};
+
+struct TerminalHandlingBatchRecord
+{
+    QString            executionId;
+    QString            pathIdentity;
+    QString            scenarioTerminalId;
+    QString            runtimeTerminalId;
+    int                terminalSequenceIndex = -1;
+    int                segmentIndex = -1;
+    QString            vehicleId;
+    TransportationMode vehicleMode = TransportationMode::Any;
+    QString            eventType;
+    int                containerCount = 0;
+    double             eventTime = 0.0;
+    double             sumYardDwellSeconds = 0.0;
+    double             sumCustomsDelaySeconds = 0.0;
+    int                customsAppliedCount = 0;
+    double             sumArrivalPenaltySeconds = 0.0;
+    double             sumTotalHandlingSeconds = 0.0;
+    double             sumDirectCostUsd = 0.0;
+    QJsonObject        stateSnapshotBefore;
+    QJsonObject        stateSnapshotAfter;
+    QStringList        containerIds;
+
+    QJsonObject toJson() const;
+};
+
+struct TerminalExecutionResult
+{
+    QString     executionId;
+    QString     pathIdentity;
+    QString     scenarioTerminalId;
+    QString     runtimeTerminalId;
+    int         terminalSequenceIndex = -1;
+    int         totalDroppedContainers = 0;
+    int         totalPickedContainers = 0;
+    int         arrivalEvents = 0;
+    int         pickupEvents = 0;
+    double      actualYardDwellSeconds = 0.0;
+    double      actualCustomsDelaySeconds = 0.0;
+    int         customsAppliedCount = 0;
+    double      actualArrivalPenaltySeconds = 0.0;
+    double      actualTotalHandlingSeconds = 0.0;
+    double      actualDirectCostUsd = 0.0;
+    QJsonObject firstArrivalStateSnapshot;
+    QJsonObject lastDepartureStateSnapshot;
+    QJsonArray  rawBatchRecords;
+
+    QJsonObject toJson() const;
 };
 
 /**
@@ -204,6 +257,14 @@ public:
      * @return JSON object containing all SD state variables and parameters
      */
     QJsonObject getSystemDynamicsState() const;
+    QJsonObject getRuntimeTerminalSnapshot() const;
+    QJsonObject getRuntimeTerminalProjection(TransportationMode mode) const;
+    QJsonObject getRuntimeTerminalProjectionsByMode() const;
+    QJsonArray  getTerminalExecutionResults(
+         const QString     &executionId = QString(),
+         const QStringList &pathIdentities = {}) const;
+    int clearTerminalExecutionResults(
+        const QString &executionId = QString());
 
     /**
      * @brief Check if system dynamics is enabled for this terminal
@@ -244,6 +305,40 @@ public:
     int getRemainingServiceCapacity() const;
 
 private:
+    struct ContainerHandlingOutcome
+    {
+        QString containerId;
+        double  baseAddingTime = 0.0;
+        double  baseDeparture = 0.0;
+        bool    customsApplied = false;
+        double  yardDwellSeconds = 0.0;
+        double  customsDelaySeconds = 0.0;
+        double  arrivalPenaltySeconds = 0.0;
+        double  totalHandlingSeconds = 0.0;
+        double  directCostUsd = 0.0;
+    };
+
+    struct HandlingMetadata
+    {
+        QString            executionId;
+        QString            pathIdentity;
+        QString            scenarioTerminalId;
+        QString            runtimeTerminalId;
+        int                terminalSequenceIndex = -1;
+        int                segmentIndex = -1;
+        QString            vehicleId;
+        TransportationMode vehicleMode = TransportationMode::Any;
+
+        bool    isValid() const;
+        QString groupingKey() const;
+    };
+
+    struct RecordedContainerArrival
+    {
+        HandlingMetadata         metadata;
+        ContainerHandlingOutcome outcome;
+    };
+
     // Terminal properties
     QString                                           m_terminalName;
     QString                                           m_displayName;
@@ -276,6 +371,8 @@ private:
     // System Dynamics
     SystemDynamicsParams m_sdParams;
     SystemDynamicsState  m_sdState;
+    QHash<QString, QList<TerminalHandlingBatchRecord>>
+        m_handlingBatchRecordsByExecution;
 
     // Thread safety
     mutable QMutex m_mutex;
@@ -301,6 +398,25 @@ private:
                                     TransportationMode mode = TransportationMode::Any) const;
     double calculateArrivalPenalty(double utilization,
                                    TransportationMode mode) const;
+    QJsonObject runtimeTerminalSnapshotLocked() const;
+    QJsonObject runtimeTerminalProjectionLocked(
+        TransportationMode mode) const;
+    HandlingMetadata extractHandlingMetadataLocked(
+        const ContainerCore::Container &container,
+        TransportationMode              arrivalMode) const;
+    ContainerHandlingOutcome handleContainerArrivalLocked(
+        const ContainerCore::Container &container,
+        double                          addingTime,
+        TransportationMode              arrivalMode);
+    void recordHandlingBatchLocked(
+        const HandlingMetadata                &metadata,
+        const QList<ContainerHandlingOutcome> &outcomes,
+        const QJsonObject                     &stateSnapshotBefore,
+        const QJsonObject                     &stateSnapshotAfter,
+        const QString                         &eventType);
+    QList<TerminalExecutionResult> terminalExecutionResultsLocked(
+        const QString     &executionId,
+        const QStringList &pathIdentities) const;
 };
 
 } // namespace TerminalSim
