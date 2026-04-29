@@ -54,7 +54,8 @@ public:
      * @param message Message to send
      * @return True if sent successfully
      */
-    bool sendResponse(const QJsonObject& message);
+    bool sendResponse(const QJsonObject& message,
+                      const QString& routingKey = QString());
 
 signals:
     /**

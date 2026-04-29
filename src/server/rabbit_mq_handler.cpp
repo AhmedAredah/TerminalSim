@@ -277,7 +277,8 @@ bool RabbitMQHandler::isConnected() const
     return m_connected && m_connection != nullptr;
 }
 
-bool RabbitMQHandler::sendResponse(const QJsonObject& message)
+bool RabbitMQHandler::sendResponse(const QJsonObject& message,
+                                   const QString& routingKey)
 {
     QMutexLocker locker(&m_mutex);
 
@@ -285,6 +286,11 @@ bool RabbitMQHandler::sendResponse(const QJsonObject& message)
         qCWarning(lcRabbitMQ) << "Cannot send response: not connected to RabbitMQ server";
         return false;
     }
+
+    const QString useRoutingKey =
+        !routingKey.isEmpty()
+            ? routingKey
+            : message.value("replyRoutingKey").toString(m_responseRoutingKey);
 
     QByteArray data = QJsonDocument(message).toJson(QJsonDocument::Compact);
 
@@ -314,7 +320,7 @@ bool RabbitMQHandler::sendResponse(const QJsonObject& message)
                 m_connection,
                 1, // channel
                 amqp_cstring_bytes(m_exchangeName.toUtf8().constData()),
-                amqp_cstring_bytes(m_responseRoutingKey.toUtf8().constData()),
+                amqp_cstring_bytes(useRoutingKey.toUtf8().constData()),
                 0, // mandatory
                 0, // immediate
                 &props,
@@ -333,7 +339,7 @@ bool RabbitMQHandler::sendResponse(const QJsonObject& message)
             }
 
             qCDebug(lcRabbitMQ) << "Published response to"
-                                << m_responseRoutingKey
+                                << useRoutingKey
                                 << "with size"
                                 << data.size() << "bytes";
             return true;
@@ -401,28 +407,8 @@ bool RabbitMQHandler::setupQueues()
             return false;
         }
 
-        // Declare response queue
-        amqp_queue_declare(
-            m_connection,
-            1, // channel
-            amqp_cstring_bytes(m_responseQueueName.toUtf8().constData()),
-            0, // passive (false)
-            1, // durable (true)
-            0, // exclusive (false)
-            0, // auto delete (false)
-            amqp_empty_table
-            );
-
-        reply = amqp_get_rpc_reply(m_connection);
-        if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-            qCWarning(lcRabbitMQ) << "Failed to declare response queue";
-            return false;
-        }
-
-        qCDebug(lcRabbitMQ) << "Queues declared:"
-                            << m_commandQueueName
-                            << "and"
-                            << m_responseQueueName;
+        qCDebug(lcRabbitMQ) << "Queue declared:"
+                            << m_commandQueueName;
         return true;
     } catch (const std::exception& e) {
         qCWarning(lcRabbitMQ) << "Exception during queue setup:" << e.what();
@@ -449,24 +435,8 @@ bool RabbitMQHandler::bindQueues()
             return false;
         }
 
-        // Bind response queue
-        amqp_queue_bind(
-            m_connection,
-            1, // channel
-            amqp_cstring_bytes(m_responseQueueName.toUtf8().constData()),
-            amqp_cstring_bytes(m_exchangeName.toUtf8().constData()),
-            amqp_cstring_bytes(m_responseRoutingKey.toUtf8().constData()),
-            amqp_empty_table
-            );
-
-        reply = amqp_get_rpc_reply(m_connection);
-        if (reply.reply_type != AMQP_RESPONSE_NORMAL) {
-            qCWarning(lcRabbitMQ) << "Failed to bind response queue";
-            return false;
-        }
-
-        qCDebug(lcRabbitMQ) << "Queues bound to exchange with routing keys:"
-                            << m_commandRoutingKey << "and" << m_responseRoutingKey;
+        qCDebug(lcRabbitMQ) << "Command queue bound to exchange with routing key:"
+                            << m_commandRoutingKey;
         return true;
     } catch (const std::exception& e) {
         qCWarning(lcRabbitMQ) << "Exception during queue binding:" << e.what();

@@ -602,11 +602,9 @@ QJsonArray
 Terminal::getContainersByDepatingTime(double departingTime,
                                       const QString& condition) const
 {
-    QMutexLocker locker(&m_mutex);
-    
-    // Validate condition
-    QStringList validConditions = {"<", "<=", ">", ">=", "==", "!="};
-    if (!validConditions.contains(condition)) {
+    const auto comparison =
+        ContainerCore::parseContainerTimeComparison(condition);
+    if (!comparison) {
         qCWarning(lcTerminal) << "Invalid condition for getContainersByDepatingTime:"
                               << condition;
         throw std::invalid_argument(
@@ -614,34 +612,21 @@ Terminal::getContainersByDepatingTime(double departingTime,
                     "<, <=, >, >=, ==, !=").arg(condition).toStdString()
             );
     }
-    
-    // Get containers from storage based on departure time
-    QVector<ContainerCore::Container *> containers =
-        m_storage->getContainersByLeavingTime(condition, departingTime);
-    
-    // Convert to JSON array
-    QJsonArray result;
-    for (const ContainerCore::Container* container : containers) {
-        result.append(container->toJson());
-    }
-    
-    qCDebug(lcTerminal) << "Found" << result.size()
-                       << "containers with departure time" <<
-        condition << departingTime
-                       << "in terminal" << m_terminalName;
-    
-    return result;
+
+    ContainerCore::ContainerSelectionCriteria criteria;
+    criteria.leavingTime =
+        ContainerCore::ContainerTimeFilter{*comparison, departingTime};
+    criteria.sortField = ContainerCore::ContainerSortField::LeavingTime;
+    return getContainers(criteria);
 }
 
 QJsonArray
 Terminal::getContainersByAddedTime(double addedTime,
                                    const QString& condition) const
 {
-    QMutexLocker locker(&m_mutex);
-    
-    // Validate condition
-    QStringList validConditions = {"<", "<=", ">", ">=", "==", "!="};
-    if (!validConditions.contains(condition)) {
+    const auto comparison =
+        ContainerCore::parseContainerTimeComparison(condition);
+    if (!comparison) {
         qCWarning(lcTerminal) << "Invalid condition for getContainersByAddedTime:"
                               << condition;
         throw std::invalid_argument(
@@ -649,105 +634,277 @@ Terminal::getContainersByAddedTime(double addedTime,
                     "<, <=, >, >=, ==, !=").arg(condition).toStdString()
             );
     }
-    
-    // Get containers from storage based on added time
-    QVector<ContainerCore::Container *> containers =
-        m_storage->getContainersByAddedTime(condition, addedTime);
-    
-    // Convert to JSON array
-    QJsonArray result;
-    for (const ContainerCore::Container* container : containers) {
-        result.append(container->toJson());
-    }
-    
-    qCDebug(lcTerminal) << "Found" << result.size()
-                       << "containers with added time" << condition << addedTime
-                       << "in terminal" << m_terminalName;
-    
-    return result;
+
+    ContainerCore::ContainerSelectionCriteria criteria;
+    criteria.addedTime =
+        ContainerCore::ContainerTimeFilter{*comparison, addedTime};
+    criteria.sortField = ContainerCore::ContainerSortField::AddedTime;
+    return getContainers(criteria);
 }
 
 QJsonArray
 Terminal::getContainersByNextDestination(const QString& destination) const
 {
+    ContainerCore::ContainerSelectionCriteria criteria;
+    criteria.nextDestination = destination;
+    return getContainers(criteria);
+}
+
+QJsonArray
+Terminal::getContainers(
+    const ContainerCore::ContainerSelectionCriteria &criteria) const
+{
     QMutexLocker locker(&m_mutex);
-    
-    // Get containers from storage based on next destination
+
     QVector<ContainerCore::Container *> containers =
-        m_storage->getContainersByNextDestination(destination);
-    
-    // Convert to JSON array
+        m_storage->getContainers(criteria);
+
     QJsonArray result;
     for (const ContainerCore::Container* container : containers) {
         result.append(container->toJson());
     }
-    
+
     qCDebug(lcTerminal) << "Found" << result.size()
-                       << "containers with next destination" << destination
-                       << "in terminal" << m_terminalName;
-    
+                        << "containers matching criteria in terminal"
+                        << m_terminalName;
+
     return result;
 }
 
 QJsonArray
 Terminal::dequeueContainersByNextDestination(const QString& destination)
 {
+    ContainerCore::ContainerSelectionCriteria criteria;
+    criteria.nextDestination = destination;
+    return dequeueContainers(criteria);
+}
+
+QJsonArray
+Terminal::dequeueContainers(
+    const ContainerCore::ContainerSelectionCriteria &criteria)
+{
     QMutexLocker locker(&m_mutex);
 
-    // Get and remove containers from storage based on next destination
-    QVector<ContainerCore::Container *> containers =
-        m_storage->dequeueContainersByNextDestination(destination);
-
-    int requestedCount = containers.size();
-    int servedCount = requestedCount;
-
-    // Apply System Dynamics service capacity limit
-    if (m_sdParams.enabled && requestedCount > 0) {
-        int remainingCapacity = capacityThisStep() - m_sdState.departuresThisStep;
-
+    ContainerCore::ContainerSelectionCriteria effectiveCriteria = criteria;
+    int remainingCapacity = -1;
+    if (m_sdParams.enabled) {
+        remainingCapacity = capacityThisStep()
+            - m_sdState.departuresThisStep
+            - m_reservedContainerIds.size();
         if (remainingCapacity <= 0) {
-            // No capacity remaining - re-add all containers and return empty
-            for (ContainerCore::Container* container : containers) {
-                m_storage->addContainer(
-                    container->getContainerID(), container,
-                    0.0, 0.0); // Re-add with original times (will be overwritten)
-            }
-            qCWarning(lcTerminal) << "SD: Service capacity exhausted at terminal" << m_terminalName
-                                  << "- cannot serve" << requestedCount << "containers";
+            qCWarning(lcTerminal) << "SD: Service capacity exhausted at terminal"
+                                  << m_terminalName
+                                  << "- cannot serve matching containers";
             return QJsonArray();
         }
 
-        if (requestedCount > remainingCapacity) {
-            // Partial service - re-add excess containers
-            servedCount = remainingCapacity;
-            for (int i = servedCount; i < requestedCount; ++i) {
-                ContainerCore::Container* container = containers[i];
-                m_storage->addContainer(
-                    container->getContainerID(), container,
-                    0.0, 0.0);
-            }
-            containers.resize(servedCount);
-
-            qCDebug(lcTerminal) << "SD: Service capacity limited departure at terminal"
-                               << m_terminalName << "- served" << servedCount
-                               << "of" << requestedCount << "requested";
+        if (effectiveCriteria.limit < 0
+            || effectiveCriteria.limit > remainingCapacity) {
+            effectiveCriteria.limit = remainingCapacity;
         }
-
-        // Track departures for SD
-        m_sdState.departuresThisStep += servedCount;
     }
 
-    // Convert to JSON array
-    QJsonArray result;
-    for (const ContainerCore::Container* container : containers) {
-        result.append(container->toJson());
+    const QStringList selectedIds =
+        selectContainerIdsForPickupLocked(effectiveCriteria,
+                                          /*excludeReserved=*/true);
+
+    if (m_sdParams.enabled && !selectedIds.isEmpty()) {
+        m_sdState.departuresThisStep += selectedIds.size();
     }
+
+    QJsonArray result = removeContainersAndRecordPickupLocked(
+        selectedIds, QStringLiteral("pickup_departure"));
 
     qCDebug(lcTerminal) << "Removed" << result.size()
-                       << "containers with next destination" << destination
-                       << "from terminal" << m_terminalName;
+                        << "containers matching criteria from terminal"
+                        << m_terminalName;
 
     return result;
+}
+
+QJsonObject Terminal::reserveContainers(
+    const QString                                   &reservationId,
+    const ContainerCore::ContainerSelectionCriteria &criteria)
+{
+    if (reservationId.trimmed().isEmpty()) {
+        throw std::invalid_argument(
+            "reservation_id must be provided");
+    }
+
+    QMutexLocker locker(&m_mutex);
+    const QString normalizedReservationId = reservationId.trimmed();
+
+    if (m_completedContainerReservations.contains(normalizedReservationId))
+        return m_completedContainerReservations.value(normalizedReservationId);
+
+    if (m_releasedContainerReservations.contains(normalizedReservationId)) {
+        QJsonObject released;
+        released.insert(QStringLiteral("reservation_id"),
+                        normalizedReservationId);
+        released.insert(QStringLiteral("state"),
+                        QStringLiteral("released"));
+        released.insert(QStringLiteral("containers"), QJsonArray());
+        released.insert(QStringLiteral("container_count"), 0);
+        return released;
+    }
+
+    if (m_containerReservations.contains(normalizedReservationId)) {
+        const auto reservation =
+            m_containerReservations.value(normalizedReservationId);
+        QJsonObject response;
+        response.insert(QStringLiteral("reservation_id"),
+                        normalizedReservationId);
+        response.insert(QStringLiteral("state"),
+                        QStringLiteral("active"));
+        response.insert(QStringLiteral("containers"),
+                        reservation.containersSnapshot);
+        response.insert(QStringLiteral("container_count"),
+                        reservation.containerIds.size());
+        return response;
+    }
+
+    ContainerCore::ContainerSelectionCriteria effectiveCriteria = criteria;
+    if (m_sdParams.enabled) {
+        const int remainingCapacity =
+            capacityThisStep() - m_sdState.departuresThisStep
+            - m_reservedContainerIds.size();
+        if (remainingCapacity <= 0) {
+            QJsonObject response;
+            response.insert(QStringLiteral("reservation_id"),
+                            normalizedReservationId);
+            response.insert(QStringLiteral("state"),
+                            QStringLiteral("blocked"));
+            response.insert(QStringLiteral("containers"), QJsonArray());
+            response.insert(QStringLiteral("container_count"), 0);
+            response.insert(QStringLiteral("reason"),
+                            QStringLiteral("service_capacity_exhausted"));
+            return response;
+        }
+
+        if (effectiveCriteria.limit < 0
+            || effectiveCriteria.limit > remainingCapacity) {
+            effectiveCriteria.limit = remainingCapacity;
+        }
+    }
+
+    const QStringList selectedIds =
+        selectContainerIdsForPickupLocked(effectiveCriteria,
+                                          /*excludeReserved=*/true);
+    QJsonArray snapshot = containersSnapshotLocked(selectedIds);
+
+    TerminalContainerReservation reservation;
+    reservation.reservationId = normalizedReservationId;
+    reservation.containerIds = selectedIds;
+    reservation.containersSnapshot = snapshot;
+    m_containerReservations.insert(normalizedReservationId,
+                                   reservation);
+    for (const QString &containerId : selectedIds) {
+        m_reservedContainerIds.insert(containerId,
+                                      normalizedReservationId);
+    }
+
+    QJsonObject response;
+    response.insert(QStringLiteral("reservation_id"),
+                    normalizedReservationId);
+    response.insert(QStringLiteral("state"),
+                    QStringLiteral("active"));
+    response.insert(QStringLiteral("containers"), snapshot);
+    response.insert(QStringLiteral("container_count"),
+                    selectedIds.size());
+    return response;
+}
+
+QJsonObject Terminal::commitContainerReservation(
+    const QString &reservationId)
+{
+    if (reservationId.trimmed().isEmpty()) {
+        throw std::invalid_argument(
+            "reservation_id must be provided");
+    }
+
+    QMutexLocker locker(&m_mutex);
+    const QString normalizedReservationId = reservationId.trimmed();
+
+    if (m_completedContainerReservations.contains(normalizedReservationId))
+        return m_completedContainerReservations.value(normalizedReservationId);
+
+    const auto reservationIt =
+        m_containerReservations.constFind(normalizedReservationId);
+    if (reservationIt == m_containerReservations.constEnd()) {
+        if (m_releasedContainerReservations.contains(
+                normalizedReservationId)) {
+            QJsonObject released;
+            released.insert(QStringLiteral("reservation_id"),
+                            normalizedReservationId);
+            released.insert(QStringLiteral("state"),
+                            QStringLiteral("released"));
+            released.insert(QStringLiteral("containers"), QJsonArray());
+            released.insert(QStringLiteral("container_count"), 0);
+            return released;
+        }
+        throw std::invalid_argument(
+            QString("Unknown container reservation: %1")
+                .arg(normalizedReservationId)
+                .toStdString());
+    }
+
+    const TerminalContainerReservation reservation =
+        reservationIt.value();
+    for (const QString &containerId : reservation.containerIds)
+        m_reservedContainerIds.remove(containerId);
+    m_containerReservations.remove(normalizedReservationId);
+
+    if (m_sdParams.enabled && !reservation.containerIds.isEmpty()) {
+        m_sdState.departuresThisStep += reservation.containerIds.size();
+    }
+
+    const QJsonArray containers = removeContainersAndRecordPickupLocked(
+        reservation.containerIds,
+        QStringLiteral("pickup_departure"));
+
+    QJsonObject response;
+    response.insert(QStringLiteral("reservation_id"),
+                    normalizedReservationId);
+    response.insert(QStringLiteral("state"),
+                    QStringLiteral("committed"));
+    response.insert(QStringLiteral("containers"), containers);
+    response.insert(QStringLiteral("container_count"),
+                    containers.size());
+    m_completedContainerReservations.insert(normalizedReservationId,
+                                            response);
+    return response;
+}
+
+QJsonObject Terminal::releaseContainerReservation(
+    const QString &reservationId)
+{
+    if (reservationId.trimmed().isEmpty()) {
+        throw std::invalid_argument(
+            "reservation_id must be provided");
+    }
+
+    QMutexLocker locker(&m_mutex);
+    const QString normalizedReservationId = reservationId.trimmed();
+
+    if (m_completedContainerReservations.contains(normalizedReservationId))
+        return m_completedContainerReservations.value(normalizedReservationId);
+
+    TerminalContainerReservation reservation =
+        m_containerReservations.take(normalizedReservationId);
+    for (const QString &containerId : reservation.containerIds)
+        m_reservedContainerIds.remove(containerId);
+    m_releasedContainerReservations.insert(normalizedReservationId);
+
+    QJsonObject response;
+    response.insert(QStringLiteral("reservation_id"),
+                    normalizedReservationId);
+    response.insert(QStringLiteral("state"),
+                    QStringLiteral("released"));
+    response.insert(QStringLiteral("containers"), QJsonArray());
+    response.insert(QStringLiteral("container_count"), 0);
+    response.insert(QStringLiteral("released_count"),
+                    reservation.containerIds.size());
+    return response;
 }
 
 int Terminal::getContainerCount() const
@@ -786,6 +943,10 @@ void Terminal::clear()
     
     qCDebug(lcTerminal) << "Clearing all containers from terminal" << m_terminalName;
     m_storage->clear();
+    m_containerReservations.clear();
+    m_reservedContainerIds.clear();
+    m_completedContainerReservations.clear();
+    m_releasedContainerReservations.clear();
 }
 
 QJsonObject Terminal::toJson() const
@@ -1540,6 +1701,98 @@ void Terminal::recordHandlingBatchLocked(
     }
 
     m_handlingBatchRecordsByExecution[metadata.executionId].append(batch);
+}
+
+QStringList Terminal::selectContainerIdsForPickupLocked(
+    const ContainerCore::ContainerSelectionCriteria &criteria,
+    bool excludeReserved) const
+{
+    ContainerCore::ContainerSelectionCriteria effectiveCriteria = criteria;
+    const int requestedLimit = effectiveCriteria.limit;
+    effectiveCriteria.limit = -1;
+
+    QVector<ContainerCore::Container *> containers =
+        m_storage->getContainers(effectiveCriteria);
+
+    QStringList selectedIds;
+    for (const auto *container : containers) {
+        if (!container)
+            continue;
+
+        const QString containerId = container->getContainerID();
+        if (excludeReserved
+            && m_reservedContainerIds.contains(containerId)) {
+            continue;
+        }
+
+        selectedIds.append(containerId);
+        if (requestedLimit >= 0 && selectedIds.size() >= requestedLimit)
+            break;
+    }
+
+    return selectedIds;
+}
+
+QJsonArray Terminal::containersSnapshotLocked(
+    const QStringList &containerIds) const
+{
+    QJsonArray snapshot;
+    for (const QString &containerId : containerIds) {
+        const auto *container = m_storage->getContainerByID(containerId);
+        if (container)
+            snapshot.append(container->toJson());
+    }
+    return snapshot;
+}
+
+QJsonArray Terminal::removeContainersAndRecordPickupLocked(
+    const QStringList &containerIds,
+    const QString     &eventType)
+{
+    const QJsonObject stateSnapshotBefore =
+        runtimeTerminalSnapshotLocked();
+
+    QJsonArray result;
+    QHash<QString, HandlingMetadata> groupedMetadata;
+    QHash<QString, QList<ContainerHandlingOutcome>> groupedOutcomes;
+
+    for (const QString &containerId : containerIds) {
+        const auto *container = m_storage->getContainerByID(containerId);
+        if (!container)
+            continue;
+
+        result.append(container->toJson());
+
+        const HandlingMetadata metadata =
+            extractHandlingMetadataLocked(*container,
+                                          TransportationMode::Any);
+        const QString key = metadata.groupingKey();
+        if (!groupedMetadata.contains(key))
+            groupedMetadata.insert(key, metadata);
+
+        ContainerHandlingOutcome outcome;
+        outcome.containerId = container->getContainerID();
+        outcome.baseAddingTime =
+            std::isnan(container->getContainerLeavingTime())
+                ? m_sdState.lastUpdateTime
+                : container->getContainerLeavingTime();
+        groupedOutcomes[key].append(outcome);
+
+        m_storage->removeContainerByID(containerId);
+    }
+
+    const QJsonObject stateSnapshotAfter =
+        runtimeTerminalSnapshotLocked();
+    for (auto it = groupedOutcomes.constBegin();
+         it != groupedOutcomes.constEnd(); ++it) {
+        recordHandlingBatchLocked(groupedMetadata.value(it.key()),
+                                  it.value(),
+                                  stateSnapshotBefore,
+                                  stateSnapshotAfter,
+                                  eventType);
+    }
+
+    return result;
 }
 
 QList<TerminalExecutionResult> Terminal::terminalExecutionResultsLocked(

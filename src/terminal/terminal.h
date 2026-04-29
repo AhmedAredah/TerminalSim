@@ -133,6 +133,13 @@ struct TerminalExecutionResult
     QJsonObject toJson() const;
 };
 
+struct TerminalContainerReservation
+{
+    QString     reservationId;
+    QStringList containerIds;
+    QJsonArray  containersSnapshot;
+};
+
 /**
  * @brief Terminal class representing a container
  *        terminal with various operations
@@ -212,7 +219,18 @@ public:
     QJsonArray getContainersByAddedTime(double         addedTime,
                                         const QString &condition) const;
     QJsonArray getContainersByNextDestination(const QString &destination) const;
+    QJsonArray
+    getContainers(const ContainerCore::ContainerSelectionCriteria &criteria) const;
     QJsonArray dequeueContainersByNextDestination(const QString &destination);
+    QJsonArray
+    dequeueContainers(const ContainerCore::ContainerSelectionCriteria &criteria);
+    QJsonObject reserveContainers(
+        const QString                                      &reservationId,
+        const ContainerCore::ContainerSelectionCriteria    &criteria);
+    QJsonObject commitContainerReservation(
+        const QString &reservationId);
+    QJsonObject releaseContainerReservation(
+        const QString &reservationId);
 
     // Terminal status
     int  getContainerCount() const;
@@ -373,6 +391,11 @@ private:
     SystemDynamicsState  m_sdState;
     QHash<QString, QList<TerminalHandlingBatchRecord>>
         m_handlingBatchRecordsByExecution;
+    QHash<QString, TerminalContainerReservation>
+        m_containerReservations;
+    QHash<QString, QString> m_reservedContainerIds;
+    QHash<QString, QJsonObject> m_completedContainerReservations;
+    QSet<QString> m_releasedContainerReservations;
 
     // Thread safety
     mutable QMutex m_mutex;
@@ -414,6 +437,14 @@ private:
         const QJsonObject                     &stateSnapshotBefore,
         const QJsonObject                     &stateSnapshotAfter,
         const QString                         &eventType);
+    QStringList selectContainerIdsForPickupLocked(
+        const ContainerCore::ContainerSelectionCriteria &criteria,
+        bool excludeReserved) const;
+    QJsonArray containersSnapshotLocked(
+        const QStringList &containerIds) const;
+    QJsonArray removeContainersAndRecordPickupLocked(
+        const QStringList &containerIds,
+        const QString     &eventType);
     QList<TerminalExecutionResult> terminalExecutionResultsLocked(
         const QString     &executionId,
         const QStringList &pathIdentities) const;
