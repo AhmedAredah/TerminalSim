@@ -1,0 +1,115 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CONTAINER_REF: v0.2.0
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+  CMAKE_CXX_COMPILER_LAUNCHER: ccache
+
+jobs:
+  linux:
+    name: Linux (${{ matrix.build_type }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type:
+          - Debug
+          - Release
+
+    env:
+      DEPS_PREFIX: ${{ github.workspace }}/deps/install
+
+    steps:
+      - name: Check out TerminalSim
+        uses: actions/checkout@v4
+
+      - name: Check Container token
+        env:
+          CONTAINER_REPO_TOKEN: ${{ secrets.CONTAINER_REPO_TOKEN }}
+        run: |
+          if [ -z "${CONTAINER_REPO_TOKEN}" ]; then
+            echo "::error::CONTAINER_REPO_TOKEN is required to check out the private Container dependency."
+            exit 1
+          fi
+
+      - name: Check out Container
+        uses: actions/checkout@v4
+        with:
+          repository: AhmedAredah/container
+          token: ${{ secrets.CONTAINER_REPO_TOKEN }}
+          ref: ${{ env.CONTAINER_REF }}
+          path: deps/container
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.6.3"
+          cache: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ccache \
+            cmake \
+            librabbitmq-dev \
+            ninja-build
+
+      - name: Prepare RabbitMQ-C include compatibility
+        run: |
+          shopt -s nullglob
+          sudo mkdir -p /usr/include/rabbitmq-c
+          for header in /usr/include/amqp*.h; do
+            sudo ln -sf "${header}" "/usr/include/rabbitmq-c/$(basename "${header}")"
+          done
+          if [ -f /usr/include/amqp_tcp_socket.h ]; then
+            sudo ln -sf /usr/include/amqp_tcp_socket.h /usr/include/rabbitmq-c/tcp_socket.h
+          fi
+          if [ -f /usr/include/amqp_framing.h ]; then
+            sudo ln -sf /usr/include/amqp_framing.h /usr/include/rabbitmq-c/framing.h
+          fi
+
+      - name: Configure Container
+        run: |
+          QT_PREFIX="$(cd "${Qt6_DIR}/../../.." && pwd)"
+          cmake -S deps/container -B deps/build/container -G Ninja \
+            -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
+            -DCMAKE_INSTALL_PREFIX="${DEPS_PREFIX}" \
+            -DCMAKE_PREFIX_PATH="${QT_PREFIX}" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_PYTHON_BINDINGS=OFF \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_DOCS=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER}"
+
+      - name: Install Container
+        run: cmake --build deps/build/container --target install --parallel
+
+      - name: Configure TerminalSim
+        run: |
+          QT_PREFIX="$(cd "${Qt6_DIR}/../../.." && pwd)"
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
+            -DCMAKE_PREFIX_PATH="${DEPS_PREFIX};${QT_PREFIX};/usr" \
+            -DCONTAINER_CMAKE_DIR="${DEPS_PREFIX}/lib/cmake/Container" \
+            -DRABBITMQ_CMAKE_DIR="/usr/lib/x86_64-linux-gnu/cmake/rabbitmq-c" \
+            -DCMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER}"
+
+      - name: Build TerminalSim
+        run: cmake --build build --parallel
+
+      - name: Test TerminalSim
+        run: ctest --test-dir build --output-on-failure
