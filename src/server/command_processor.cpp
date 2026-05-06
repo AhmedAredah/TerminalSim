@@ -1,13 +1,397 @@
 #include "command_processor.h"
 
 #include <QDateTime>
-#include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMutexLocker>
 #include <QUuid>
+#include <containerLib/containermap.h>
+#include <cmath>
+#include <optional>
 #include <stdexcept>
+
+#include "common/LogCategories.h"
+
+namespace
+{
+
+using ContainerCore::Container;
+using ContainerCore::ContainerCustomVariableFilter;
+using ContainerCore::ContainerSelectionCriteria;
+using ContainerCore::ContainerSortField;
+using ContainerCore::ContainerTimeFilter;
+
+double requiredDouble(const QVariantMap &values,
+                      const QStringList &keys,
+                      const QString     &context)
+{
+    for (const QString &key : keys)
+    {
+        if (!values.contains(key))
+            continue;
+
+        bool ok = false;
+        const double parsed = values.value(key).toDouble(&ok);
+        if (ok)
+            return parsed;
+    }
+
+    throw std::invalid_argument(
+        QString("Missing or invalid numeric value for %1")
+            .arg(context)
+            .toStdString());
+}
+
+QString comparisonText(const QVariantMap &values,
+                       const QString     &fallback = QStringLiteral("<="))
+{
+    for (const QString &key :
+         {QStringLiteral("comparison"), QStringLiteral("condition"),
+          QStringLiteral("op"), QStringLiteral("operator")})
+    {
+        if (values.contains(key) && !values.value(key).toString().isEmpty())
+            return values.value(key).toString();
+    }
+    return fallback;
+}
+
+ContainerTimeFilter parseTimeFilterMap(const QVariantMap &values,
+                                       const QString     &context)
+{
+    const auto comparison =
+        ContainerCore::parseContainerTimeComparison(comparisonText(values));
+    if (!comparison)
+    {
+        throw std::invalid_argument(
+            QString("Invalid comparison operator for %1")
+                .arg(context)
+                .toStdString());
+    }
+
+    return ContainerTimeFilter{
+        *comparison,
+        requiredDouble(values,
+                       {QStringLiteral("value"),
+                        QStringLiteral("reference_time"),
+                        QStringLiteral("referenceTime"),
+                        QStringLiteral("time")},
+                       context)};
+}
+
+std::optional<ContainerTimeFilter> parseTimeFilter(
+    const QVariantMap &source,
+    const QStringList &keys,
+    const QStringList &conditionKeys,
+    const QString     &context)
+{
+    for (const QString &key : keys)
+    {
+        if (!source.contains(key))
+            continue;
+
+        const QVariant value = source.value(key);
+        if (value.canConvert<QVariantMap>())
+            return parseTimeFilterMap(value.toMap(), context);
+
+        bool ok = false;
+        const double referenceTime = value.toDouble(&ok);
+        if (!ok)
+        {
+            throw std::invalid_argument(
+                QString("Invalid numeric value for %1")
+                    .arg(context)
+                    .toStdString());
+        }
+
+        QString condition = QStringLiteral("<=");
+        for (const QString &conditionKey : conditionKeys)
+        {
+            if (source.contains(conditionKey)
+                && !source.value(conditionKey).toString().isEmpty())
+            {
+                condition = source.value(conditionKey).toString();
+                break;
+            }
+        }
+
+        const auto comparison =
+            ContainerCore::parseContainerTimeComparison(condition);
+        if (!comparison)
+        {
+            throw std::invalid_argument(
+                QString("Invalid comparison operator for %1")
+                    .arg(context)
+                    .toStdString());
+        }
+
+        return ContainerTimeFilter{*comparison, referenceTime};
+    }
+
+    return std::nullopt;
+}
+
+ContainerSortField parseSortField(const QString &value)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized == QStringLiteral("added_time")
+        || normalized == QStringLiteral("addedtime"))
+        return ContainerSortField::AddedTime;
+    if (normalized == QStringLiteral("leaving_time")
+        || normalized == QStringLiteral("leavingtime")
+        || normalized == QStringLiteral("departing_time")
+        || normalized == QStringLiteral("departingtime"))
+        return ContainerSortField::LeavingTime;
+    return ContainerSortField::ContainerId;
+}
+
+Container::HaulerType parseHauler(const QVariant &value)
+{
+    bool ok = false;
+    const int intValue = value.toInt(&ok);
+    if (ok)
+        return static_cast<Container::HaulerType>(intValue);
+
+    const QString normalized = value.toString().trimmed().toLower();
+    if (normalized == QStringLiteral("truck"))
+        return Container::truck;
+    if (normalized == QStringLiteral("train"))
+        return Container::train;
+    if (normalized == QStringLiteral("watertransport")
+        || normalized == QStringLiteral("water_transport")
+        || normalized == QStringLiteral("ship"))
+        return Container::waterTransport;
+    if (normalized == QStringLiteral("airtransport")
+        || normalized == QStringLiteral("air_transport")
+        || normalized == QStringLiteral("air"))
+        return Container::airTransport;
+    return Container::noHauler;
+}
+
+std::optional<double> optionalDoubleParam(const QVariantMap &params,
+                                          const QStringList &keys,
+                                          const QString     &context)
+{
+    for (const QString &key : keys)
+    {
+        if (!params.contains(key))
+            continue;
+
+        bool ok = false;
+        const double parsed = params.value(key).toDouble(&ok);
+        if (!ok || !std::isfinite(parsed))
+        {
+            throw std::invalid_argument(
+                QString("Invalid numeric value for %1")
+                    .arg(context)
+                    .toStdString());
+        }
+        return parsed;
+    }
+    return std::nullopt;
+}
+
+TerminalSim::TerminalArrivalSemantics parseArrivalSemanticsText(
+    const QString &value)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized.isEmpty() || normalized == QStringLiteral("infer"))
+        return TerminalSim::TerminalArrivalSemantics::Infer;
+    if (normalized == QStringLiteral("runtime")
+        || normalized == QStringLiteral("runtime_arrival")
+        || normalized == QStringLiteral("arrival")
+        || normalized == QStringLiteral("dropoff"))
+        return TerminalSim::TerminalArrivalSemantics::RuntimeArrival;
+    if (normalized == QStringLiteral("preload")
+        || normalized == QStringLiteral("seed")
+        || normalized == QStringLiteral("initial_inventory"))
+        return TerminalSim::TerminalArrivalSemantics::Preload;
+
+    throw std::invalid_argument(
+        QString("Invalid arrival_semantics: %1")
+            .arg(value)
+            .toStdString());
+}
+
+TerminalSim::TerminalArrivalSemantics arrivalSemanticsFromParams(
+    const QVariantMap &params)
+{
+    for (const QString &key :
+         {QStringLiteral("arrival_semantics"),
+          QStringLiteral("arrivalSemantics")})
+    {
+        if (params.contains(key))
+            return parseArrivalSemanticsText(params.value(key).toString());
+    }
+
+    if (params.contains(QStringLiteral("preload")))
+    {
+        return params.value(QStringLiteral("preload")).toBool()
+            ? TerminalSim::TerminalArrivalSemantics::Preload
+            : TerminalSim::TerminalArrivalSemantics::RuntimeArrival;
+    }
+
+    return TerminalSim::TerminalArrivalSemantics::Infer;
+}
+
+double operationTimeFromParams(const QVariantMap &params)
+{
+    return optionalDoubleParam(params,
+                               {QStringLiteral("operation_time"),
+                                QStringLiteral("operationTime"),
+                                QStringLiteral("current_time"),
+                                QStringLiteral("currentTime")},
+                               QStringLiteral("operation_time"))
+        .value_or(-1.0);
+}
+
+TerminalSim::TransportationMode parseModeParam(const QVariant &value,
+                                               bool            allowAny,
+                                               const QString  &context)
+{
+    TerminalSim::TransportationMode mode;
+    if (value.typeId() == QMetaType::QString)
+    {
+        mode = TerminalSim::EnumUtils::parseTransportationMode(
+            value.toString());
+    }
+    else if (value.canConvert<int>())
+    {
+        mode = TerminalSim::EnumUtils::parseTransportationMode(
+            QString::number(value.toInt()));
+    }
+    else
+    {
+        throw std::invalid_argument(
+            QString("Invalid transportation mode for %1")
+                .arg(context)
+                .toStdString());
+    }
+
+    if (!allowAny && mode == TerminalSim::TransportationMode::Any)
+    {
+        throw std::invalid_argument(
+            QString("Concrete transportation mode required for %1")
+                .arg(context)
+                .toStdString());
+    }
+    return mode;
+}
+
+QVariantMap criteriaMapFromParams(const QVariantMap &params)
+{
+    if (!params.contains(QStringLiteral("criteria")))
+        return params;
+
+    const QVariant criteriaValue = params.value(QStringLiteral("criteria"));
+    if (criteriaValue.canConvert<QVariantMap>())
+        return criteriaValue.toMap();
+
+    if (criteriaValue.typeId() == QMetaType::QString)
+    {
+        const QJsonDocument document =
+            QJsonDocument::fromJson(criteriaValue.toString().toUtf8());
+        if (document.isObject())
+            return document.object().toVariantMap();
+    }
+
+    throw std::invalid_argument(
+        "criteria must be an object or JSON object string");
+}
+
+ContainerSelectionCriteria containerSelectionCriteriaFromParams(
+    const QVariantMap &params)
+{
+    const QVariantMap source = criteriaMapFromParams(params);
+
+    ContainerSelectionCriteria criteria;
+    criteria.addedTime =
+        parseTimeFilter(source,
+                        {QStringLiteral("added_time"),
+                         QStringLiteral("addedTime")},
+                        {QStringLiteral("added_time_condition"),
+                         QStringLiteral("addedTimeCondition"),
+                         QStringLiteral("condition")},
+                        QStringLiteral("added_time"));
+    criteria.leavingTime =
+        parseTimeFilter(source,
+                        {QStringLiteral("leaving_time"),
+                         QStringLiteral("leavingTime"),
+                         QStringLiteral("departing_time"),
+                         QStringLiteral("departingTime")},
+                        {QStringLiteral("leaving_time_condition"),
+                         QStringLiteral("leavingTimeCondition"),
+                         QStringLiteral("departing_time_condition"),
+                         QStringLiteral("departingTimeCondition"),
+                         QStringLiteral("condition")},
+                        QStringLiteral("leaving_time"));
+
+    const QVariant currentLocation =
+        source.contains(QStringLiteral("current_location"))
+            ? source.value(QStringLiteral("current_location"))
+            : source.value(QStringLiteral("currentLocation"));
+    if (currentLocation.isValid() && !currentLocation.toString().isEmpty())
+        criteria.currentLocation = currentLocation.toString();
+
+    const QVariant nextDestination =
+        source.contains(QStringLiteral("next_destination"))
+            ? source.value(QStringLiteral("next_destination"))
+            : source.contains(QStringLiteral("nextDestination"))
+                  ? source.value(QStringLiteral("nextDestination"))
+                  : source.value(QStringLiteral("destination"));
+    if (nextDestination.isValid() && !nextDestination.toString().isEmpty())
+        criteria.nextDestination = nextDestination.toString();
+
+    const QVariant customVariables =
+        source.contains(QStringLiteral("custom_variables"))
+            ? source.value(QStringLiteral("custom_variables"))
+            : source.value(QStringLiteral("customVariables"));
+    if (customVariables.canConvert<QVariantList>())
+    {
+        for (const QVariant &entryValue : customVariables.toList())
+        {
+            if (!entryValue.canConvert<QVariantMap>())
+                continue;
+
+            const QVariantMap entry = entryValue.toMap();
+            const QString key = entry.value(QStringLiteral("key")).toString();
+            if (key.isEmpty() || !entry.contains(QStringLiteral("value")))
+            {
+                throw std::invalid_argument(
+                    "custom variable filters require key and value");
+            }
+
+            criteria.customVariables.append(
+                ContainerCustomVariableFilter{
+                    parseHauler(entry.value(QStringLiteral("hauler"))),
+                    key,
+                    entry.value(QStringLiteral("value"))});
+        }
+    }
+
+    const QVariant sortField =
+        source.contains(QStringLiteral("sort_by"))
+            ? source.value(QStringLiteral("sort_by"))
+            : source.contains(QStringLiteral("sort_field"))
+                  ? source.value(QStringLiteral("sort_field"))
+                  : source.value(QStringLiteral("sortField"));
+    if (sortField.isValid() && !sortField.toString().isEmpty())
+        criteria.sortField = parseSortField(sortField.toString());
+
+    const QVariant sortAscending =
+        source.contains(QStringLiteral("sort_ascending"))
+            ? source.value(QStringLiteral("sort_ascending"))
+            : source.value(QStringLiteral("sortAscending"));
+    if (sortAscending.isValid())
+        criteria.sortAscending = sortAscending.toBool();
+
+    if (source.contains(QStringLiteral("limit")))
+        criteria.limit = source.value(QStringLiteral("limit")).toLongLong();
+
+    return criteria;
+}
+
+} // namespace
 
 namespace TerminalSim
 {
@@ -17,13 +401,13 @@ CommandProcessor::CommandProcessor(TerminalGraph *graph, QObject *parent)
     , m_graph(graph)
 {
     registerCommands();
-    qDebug() << "Command processor initialized with" << m_commandHandlers.size()
-             << "command handlers";
+    qCDebug(lcCommandProcessor) << "Command processor initialized with" << m_commandHandlers.size()
+                                << "command handlers";
 }
 
 CommandProcessor::~CommandProcessor()
 {
-    qDebug() << "Command processor destroyed";
+    qCDebug(lcCommandProcessor) << "Command processor destroyed";
 }
 
 void CommandProcessor::registerCommands()
@@ -131,19 +515,67 @@ void CommandProcessor::registerCommands()
 
         Terminal *terminal = getTerminalFromParams(params);
 
-        QList<ContainerCore::Container> containers;
-
-        QVariantList containersList = params.value("containers").toList();
-        for (const QVariant &containerVar : containersList)
-        {
-            QJsonObject containerJson =
-                QJsonDocument::fromJson(containerVar.toString().toUtf8())
-                    .object();
-            ContainerCore::Container container(containerJson);
-            containers.append(container);
+        // Extract arrival mode if provided
+        TransportationMode arrivalMode = TransportationMode::Any;
+        if (params.contains("arrival_mode")) {
+            arrivalMode = parseModeParam(params.value("arrival_mode"), true,
+                                         QStringLiteral("arrival_mode"));
         }
 
-        terminal->addContainers(containers, addingTime);
+        QList<ContainerCore::Container> containers;
+
+        QVariant containersValue = params.value("containers");
+
+        if (containersValue.typeId() == QMetaType::QString)
+        {
+            // JSON document string (from CargoNetSim string variant)
+            // Format: {"containers": [{...}, {...}]}
+            QString jsonStr = containersValue.toString();
+            QJsonDocument doc =
+                QJsonDocument::fromJson(jsonStr.toUtf8());
+            if (doc.isObject())
+            {
+                QJsonArray arr =
+                    doc.object().value("containers").toArray();
+                for (const QJsonValue &val : arr)
+                {
+                    if (val.isObject())
+                    {
+                        ContainerCore::Container container(
+                            val.toObject());
+                        containers.append(container);
+                    }
+                }
+            }
+        }
+        else if (containersValue.canConvert<QVariantList>())
+        {
+            // List of container objects (from QJsonArray path)
+            QVariantList containersList = containersValue.toList();
+            for (const QVariant &containerVar : containersList)
+            {
+                QJsonObject containerJson;
+                if (containerVar.canConvert<QVariantMap>())
+                {
+                    containerJson =
+                        QJsonObject::fromVariantMap(containerVar.toMap());
+                }
+                else
+                {
+                    containerJson =
+                        QJsonDocument::fromJson(
+                            containerVar.toString().toUtf8())
+                            .object();
+                }
+                ContainerCore::Container container(containerJson);
+                containers.append(container);
+            }
+        }
+
+        terminal->addContainers(containers,
+                                addingTime,
+                                arrivalMode,
+                                arrivalSemanticsFromParams(params));
         return QVariant(true);
     });
 
@@ -161,13 +593,23 @@ void CommandProcessor::registerCommands()
 
         Terminal *terminal = getTerminalFromParams(params);
 
+        // Extract arrival mode if provided
+        TransportationMode arrivalMode = TransportationMode::Any;
+        if (params.contains("arrival_mode")) {
+            arrivalMode = parseModeParam(params.value("arrival_mode"), true,
+                                         QStringLiteral("arrival_mode"));
+        }
+
         QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
         if (!doc.isObject())
         {
             throw std::invalid_argument("Invalid JSON format for containers");
         }
 
-        terminal->addContainersFromJson(doc.object(), addingTime);
+        terminal->addContainersFromJson(doc.object(),
+                                        addingTime,
+                                        arrivalMode,
+                                        arrivalSemanticsFromParams(params));
         return QVariant(true);
     });
 
@@ -222,6 +664,17 @@ void CommandProcessor::registerCommands()
             return terminal->getContainersByNextDestination(destination);
         });
 
+    registerCommand("get_containers", [this](const QVariantMap &params) {
+        if (params.value("terminal_id").toString().isEmpty())
+        {
+            throw std::invalid_argument("Terminal ID must be provided");
+        }
+
+        Terminal *terminal = getTerminalFromParams(params);
+        return terminal->getContainers(
+            containerSelectionCriteriaFromParams(params));
+    });
+
     registerCommand(
         "dequeue_containers_by_next_destination",
         [this](const QVariantMap &params) {
@@ -236,8 +689,85 @@ void CommandProcessor::registerCommands()
 
             Terminal *terminal = getTerminalFromParams(params);
 
-            return terminal->dequeueContainersByNextDestination(destination);
+            return terminal->dequeueContainersByNextDestination(
+                destination,
+                operationTimeFromParams(params));
         });
+
+    registerCommand("dequeue_containers", [this](const QVariantMap &params) {
+        if (params.value("terminal_id").toString().isEmpty())
+        {
+            throw std::invalid_argument("Terminal ID must be provided");
+        }
+
+        Terminal *terminal = getTerminalFromParams(params);
+        return terminal->dequeueContainers(
+            containerSelectionCriteriaFromParams(params),
+            operationTimeFromParams(params));
+    });
+
+    registerCommand("reserve_containers", [this](const QVariantMap &params) {
+        if (params.value("terminal_id").toString().isEmpty())
+        {
+            throw std::invalid_argument("Terminal ID must be provided");
+        }
+
+        const QString reservationId =
+            params.contains(QStringLiteral("reservation_id"))
+                ? params.value(QStringLiteral("reservation_id")).toString()
+                : params.value(QStringLiteral("reservationId")).toString();
+        if (reservationId.trimmed().isEmpty())
+        {
+            throw std::invalid_argument("reservation_id must be provided");
+        }
+
+        Terminal *terminal = getTerminalFromParams(params);
+        return terminal->reserveContainers(
+            reservationId,
+            containerSelectionCriteriaFromParams(params));
+    });
+
+    registerCommand("commit_container_reservation",
+                    [this](const QVariantMap &params) {
+        if (params.value("terminal_id").toString().isEmpty())
+        {
+            throw std::invalid_argument("Terminal ID must be provided");
+        }
+
+        const QString reservationId =
+            params.contains(QStringLiteral("reservation_id"))
+                ? params.value(QStringLiteral("reservation_id")).toString()
+                : params.value(QStringLiteral("reservationId")).toString();
+        if (reservationId.trimmed().isEmpty())
+        {
+            throw std::invalid_argument("reservation_id must be provided");
+        }
+
+        Terminal *terminal = getTerminalFromParams(params);
+        return terminal->commitContainerReservation(
+            reservationId,
+            operationTimeFromParams(params));
+    });
+
+    registerCommand("release_container_reservation",
+                    [this](const QVariantMap &params) {
+        if (params.value("terminal_id").toString().isEmpty())
+        {
+            throw std::invalid_argument("Terminal ID must be provided");
+        }
+
+        const QString reservationId =
+            params.contains(QStringLiteral("reservation_id"))
+                ? params.value(QStringLiteral("reservation_id")).toString()
+                : params.value(QStringLiteral("reservationId")).toString();
+        if (reservationId.trimmed().isEmpty())
+        {
+            throw std::invalid_argument("reservation_id must be provided");
+        }
+
+        Terminal *terminal = getTerminalFromParams(params);
+        return terminal->releaseContainerReservation(reservationId);
+    });
 
     registerCommand("get_container_count", [this](const QVariantMap &params) {
         QString terminalId = params.value("terminal_id").toString();
@@ -292,6 +822,273 @@ void CommandProcessor::registerCommands()
         terminal->clear();
         return QVariant(true);
     });
+
+    registerCommand("reset_runtime_state", [this](const QVariantMap &params) {
+        QStringList resolvedTerminalIds;
+        const QVariant terminalIdsValue =
+            params.value(QStringLiteral("terminal_ids"));
+
+        if (terminalIdsValue.canConvert<QVariantList>())
+        {
+            for (const QVariant &terminalId :
+                 terminalIdsValue.toList())
+            {
+                const QString value = terminalId.toString().trimmed();
+                if (!value.isEmpty())
+                    resolvedTerminalIds.append(value);
+            }
+        }
+        else if (params.contains(QStringLiteral("terminal_id")))
+        {
+            const QString terminalId =
+                params.value(QStringLiteral("terminal_id"))
+                    .toString()
+                    .trimmed();
+            if (!terminalId.isEmpty())
+                resolvedTerminalIds.append(terminalId);
+        }
+
+        const QStringList responseTerminalIds = resolvedTerminalIds.isEmpty()
+            ? m_graph->getAllTerminalNames(false).keys()
+            : resolvedTerminalIds;
+        const int resetCount =
+            m_graph->resetRuntimeState(resolvedTerminalIds);
+
+        QJsonObject response;
+        response[QStringLiteral("terminals_reset")] = resetCount;
+        QJsonArray terminalIds;
+        for (const QString &terminalId : responseTerminalIds)
+            terminalIds.append(terminalId);
+        response[QStringLiteral("terminal_ids")] = terminalIds;
+        response[QStringLiteral("scope")] =
+            resolvedTerminalIds.isEmpty() ? QStringLiteral("all")
+                                          : QStringLiteral("selected");
+        return response;
+    });
+
+    // System Dynamics commands
+    registerCommand("update_system_dynamics", [this](const QVariantMap &params) {
+        QString terminalId = params.value("terminal_id").toString();
+        double  currentTime = params.value("current_time", 0.0).toDouble();
+        double  deltaT = params.value("delta_t", 3600.0).toDouble();  // seconds; 3600 = 1 hour
+
+        if (terminalId.isEmpty())
+        {
+            throw std::invalid_argument("Terminal ID must be provided");
+        }
+
+        Terminal *terminal = getTerminalFromParams(params);
+        terminal->updateSystemDynamics(currentTime, deltaT);
+
+        return terminal->getSystemDynamicsState();
+    });
+
+    registerCommand("get_system_dynamics_state", [this](const QVariantMap &params) {
+        QString terminalId = params.value("terminal_id").toString();
+
+        if (terminalId.isEmpty())
+        {
+            throw std::invalid_argument("Terminal ID must be provided");
+        }
+
+        Terminal *terminal = getTerminalFromParams(params);
+        return terminal->getSystemDynamicsState();
+    });
+
+    registerCommand("update_all_terminals_sd", [this](const QVariantMap &params) {
+        double currentTime = params.value("current_time", 0.0).toDouble();
+        double deltaT = params.value("delta_t", 3600.0).toDouble();  // seconds; 3600 = 1 hour
+
+        QJsonArray results;
+        QStringList terminalNames = m_graph->getAllTerminalNames(false).keys();
+
+        for (const QString& terminalName : terminalNames)
+        {
+            Terminal* terminal = m_graph->getTerminal(terminalName);
+            if (terminal && terminal->isSystemDynamicsEnabled())
+            {
+                terminal->updateSystemDynamics(currentTime, deltaT);
+
+                QJsonObject terminalResult;
+                terminalResult["terminal_id"] = terminalName;
+                terminalResult["state"] = terminal->getSystemDynamicsState();
+                results.append(terminalResult);
+            }
+        }
+
+        QJsonObject response;
+        response["terminals_updated"] = results.size();
+        response["results"] = results;
+        return response;
+    });
+
+    registerCommand("get_terminals_runtime_state",
+                    [this](const QVariantMap &params) {
+        QVariantList terminalIds = params.value("terminal_ids").toList();
+        if (terminalIds.isEmpty())
+        {
+            throw std::invalid_argument(
+                "terminal_ids must be provided");
+        }
+
+        QJsonArray results;
+        for (const auto &terminalIdVar : terminalIds)
+        {
+            const QString terminalId = terminalIdVar.toString();
+            if (terminalId.isEmpty())
+                continue;
+
+            Terminal *terminal = m_graph->getTerminal(terminalId);
+            if (!terminal)
+            {
+                throw std::invalid_argument(
+                    QString("Terminal not found: %1")
+                        .arg(terminalId)
+                        .toStdString());
+            }
+
+            results.append(terminal->getRuntimeTerminalSnapshot());
+        }
+
+        QJsonObject response;
+        response["terminals_requested"] = terminalIds.size();
+        response["results"] = results;
+        return response;
+    });
+
+    registerCommand("get_terminals_runtime_projections",
+                    [this](const QVariantMap &params) {
+        QVariantList terminalIds = params.value("terminal_ids").toList();
+        if (terminalIds.isEmpty())
+        {
+            throw std::invalid_argument(
+                "terminal_ids must be provided");
+        }
+
+        QJsonArray results;
+        for (const auto &terminalIdVar : terminalIds)
+        {
+            const QString terminalId = terminalIdVar.toString();
+            if (terminalId.isEmpty())
+                continue;
+
+            Terminal *terminal = m_graph->getTerminal(terminalId);
+            if (!terminal)
+            {
+                throw std::invalid_argument(
+                    QString("Terminal not found: %1")
+                        .arg(terminalId)
+                        .toStdString());
+            }
+
+            results.append(terminal->getRuntimeTerminalProjectionsByMode());
+        }
+
+        QJsonObject response;
+        response["terminals_requested"] = terminalIds.size();
+        response["results"] = results;
+        return response;
+    });
+
+    registerCommand("get_terminal_execution_results",
+                    [this](const QVariantMap &params) {
+        const QString executionId =
+            params.value("execution_id").toString();
+        const QVariantList terminalIds =
+            params.value("terminal_ids").toList();
+        const QVariantList canonicalPathKeyVars =
+            params.value("canonical_path_keys").toList();
+
+        QStringList canonicalPathKeys;
+        for (const auto &canonicalPathKey : canonicalPathKeyVars)
+        {
+            if (!canonicalPathKey.toString().isEmpty())
+                canonicalPathKeys.append(canonicalPathKey.toString());
+        }
+
+        QStringList resolvedTerminalIds;
+        if (!terminalIds.isEmpty())
+        {
+            for (const auto &terminalIdVar : terminalIds)
+            {
+                if (!terminalIdVar.toString().isEmpty())
+                    resolvedTerminalIds.append(terminalIdVar.toString());
+            }
+        }
+        else
+        {
+            resolvedTerminalIds =
+                m_graph->getAllTerminalNames(false).keys();
+        }
+
+        QJsonArray results;
+        for (const auto &terminalId : resolvedTerminalIds)
+        {
+            Terminal *terminal = m_graph->getTerminal(terminalId);
+            if (!terminal)
+            {
+                throw std::invalid_argument(
+                    QString("Terminal not found: %1")
+                        .arg(terminalId)
+                        .toStdString());
+            }
+
+            const QJsonArray terminalResults =
+                terminal->getTerminalExecutionResults(
+                    executionId, canonicalPathKeys);
+            for (const auto &value : terminalResults)
+                results.append(value);
+        }
+
+        QJsonObject response;
+        response["execution_id"] = executionId;
+        response["results"] = results;
+        return response;
+    });
+
+    registerCommand("clear_terminal_execution_results",
+                    [this](const QVariantMap &params) {
+        const QString executionId =
+            params.value("execution_id").toString();
+        const QVariantList terminalIds =
+            params.value("terminal_ids").toList();
+
+        QStringList resolvedTerminalIds;
+        if (!terminalIds.isEmpty())
+        {
+            for (const auto &terminalIdVar : terminalIds)
+            {
+                if (!terminalIdVar.toString().isEmpty())
+                    resolvedTerminalIds.append(terminalIdVar.toString());
+            }
+        }
+        else
+        {
+            resolvedTerminalIds =
+                m_graph->getAllTerminalNames(false).keys();
+        }
+
+        int cleared = 0;
+        for (const auto &terminalId : resolvedTerminalIds)
+        {
+            Terminal *terminal = m_graph->getTerminal(terminalId);
+            if (!terminal)
+            {
+                throw std::invalid_argument(
+                    QString("Terminal not found: %1")
+                        .arg(terminalId)
+                        .toStdString());
+            }
+            cleared += terminal->clearTerminalExecutionResults(
+                executionId);
+        }
+
+        QJsonObject response;
+        response["execution_id"] = executionId;
+        response["terminals_cleared"] = resolvedTerminalIds.size();
+        response["records_cleared"] = cleared;
+        return response;
+    });
 }
 
 void CommandProcessor::registerCommand(const QString &command,
@@ -306,12 +1103,12 @@ QVariant CommandProcessor::processCommand(const QString     &command,
 {
     QMutexLocker locker(&m_mutex);
 
-    qDebug() << "Processing command:" << command;
+    qCDebug(lcCommandProcessor) << "Processing command:" << command;
 
     // Check if command exists
     if (!m_commandHandlers.contains(command))
     {
-        qWarning() << "Unknown command:" << command;
+        qCWarning(lcCommandProcessor) << "Unknown command:" << command;
         throw std::invalid_argument(
             QString("Unknown command: %1").arg(command).toStdString());
     }
@@ -332,7 +1129,7 @@ QVariant CommandProcessor::processCommand(const QString     &command,
     }
     catch (const std::exception &e)
     {
-        qWarning() << "Error processing command" << command << ":" << e.what();
+        qCWarning(lcCommandProcessor) << "Error processing command" << command << ":" << e.what();
         throw;
     }
 }
@@ -374,6 +1171,12 @@ CommandProcessor::processJsonCommand(const QJsonObject &commandObject)
     if (commandObject.contains("commandId"))
     {
         response["commandId"] = commandObject["commandId"];
+    }
+
+    // Echo params back so the caller can identify the response
+    if (commandObject.contains("params"))
+    {
+        response["params"] = commandObject["params"];
     }
 
     // Add timestamp
@@ -451,9 +1254,23 @@ QString CommandProcessor::determineEventName(const QString &command)
     else if (command == "get_containers_by_departing_time"
              || command == "get_containers_by_added_time"
              || command == "get_containers_by_next_destination"
-             || command == "dequeue_containers_by_next_destination")
+             || command == "get_containers"
+             || command == "dequeue_containers_by_next_destination"
+             || command == "dequeue_containers")
     {
         return "containersFetched";
+    }
+    else if (command == "reserve_containers")
+    {
+        return "containersReserved";
+    }
+    else if (command == "commit_container_reservation")
+    {
+        return "containerReservationCommitted";
+    }
+    else if (command == "release_container_reservation")
+    {
+        return "containerReservationReleased";
     }
     else if (command == "get_container_count"
              || command == "get_available_capacity"
@@ -477,9 +1294,38 @@ QString CommandProcessor::determineEventName(const QString &command)
     {
         return "serverReset";
     }
+    else if (command == "reset_runtime_state")
+    {
+        return "runtimeStateReset";
+    }
     else if (command == "set_cost_function_parameters")
     {
         return "costFunctionUpdated";
+    }
+    else if (command == "get_system_dynamics_state")
+    {
+        return "systemDynamicsState";
+    }
+    else if (command == "update_system_dynamics"
+             || command == "update_all_terminals_sd")
+    {
+        return "systemDynamicsUpdated";
+    }
+    else if (command == "get_terminals_runtime_state")
+    {
+        return "terminalRuntimeState";
+    }
+    else if (command == "get_terminals_runtime_projections")
+    {
+        return "terminalRuntimeProjections";
+    }
+    else if (command == "get_terminal_execution_results")
+    {
+        return "terminalExecutionResults";
+    }
+    else if (command == "clear_terminal_execution_results")
+    {
+        return "terminalExecutionResultsCleared";
     }
     else
     {
@@ -530,17 +1376,13 @@ QVariant CommandProcessor::handleResetServer(const QVariantMap &params)
     // Clear the existing graph
     m_graph->clear();
 
-    // Reinitialize any default settings
-    // reset default link attributes or cost function parameters
-    m_graph->setLinkDefaultAttributes({{"cost", 1.0},
-                                       {"travelTime", 1.0},
-                                       {"distance", 1.0},
-                                       {"carbonEmissions", 1.0},
-                                       {"risk", 1.0},
-                                       {"energyConsumption", 1.0}});
+    // Reinitialize graph-level prediction configuration as part of a full
+    // server reset. Runtime-only resets should use the future
+    // reset_runtime_state command instead.
+    m_graph->resetConfigurationToDefaults();
 
-    qInfo() << "Server reset: Terminal graph cleared "
-               "and reinitialized to fresh state";
+    qCInfo(lcCommandProcessor) << "Server reset: Terminal graph cleared "
+                                  "and reinitialized to fresh state";
 
     // Return success
     QVariantMap response;
@@ -656,22 +1498,9 @@ QVariant CommandProcessor::handleAddRoute(const QVariantMap &params)
     QString startTerminal = params["start_terminal"].toString();
     QString endTerminal   = params["end_terminal"].toString();
 
-    // Extract mode
-    TransportationMode mode;
-    QVariant           modeVar = params["mode"];
-
-    if (modeVar.canConvert<int>())
-    {
-        mode = static_cast<TransportationMode>(modeVar.toInt());
-    }
-    else if (modeVar.canConvert<QString>())
-    {
-        mode = EnumUtils::stringToTransportationMode(modeVar.toString());
-    }
-    else
-    {
-        throw std::invalid_argument("Invalid mode parameter");
-    }
+    const TransportationMode mode = parseModeParam(
+        params.value(QStringLiteral("mode")), false,
+        QStringLiteral("add_route.mode"));
 
     // Extract attributes (optional)
     QVariantMap attributes;
@@ -757,16 +1586,8 @@ QVariant CommandProcessor::handleFindShortestPath(const QVariantMap &params)
     TransportationMode mode = TransportationMode::Any; // Default
     if (params.contains("mode"))
     {
-        QVariant modeVar = params["mode"];
-
-        if (modeVar.canConvert<int>())
-        {
-            mode = static_cast<TransportationMode>(modeVar.toInt());
-        }
-        else if (modeVar.canConvert<QString>())
-        {
-            mode = EnumUtils::stringToTransportationMode(modeVar.toString());
-        }
+        mode = parseModeParam(params.value(QStringLiteral("mode")), true,
+                              QStringLiteral("find_shortest_path.mode"));
     }
 
     // Find the shortest path
@@ -801,16 +1622,8 @@ QVariant CommandProcessor::handleFindTopPaths(const QVariantMap &params)
     TransportationMode mode = TransportationMode::Truck; // Default
     if (params.contains("mode"))
     {
-        QVariant modeVar = params["mode"];
-
-        if (modeVar.canConvert<int>())
-        {
-            mode = static_cast<TransportationMode>(modeVar.toInt());
-        }
-        else if (modeVar.canConvert<QString>())
-        {
-            mode = EnumUtils::stringToTransportationMode(modeVar.toString());
-        }
+        mode = parseModeParam(params.value(QStringLiteral("mode")), true,
+                              QStringLiteral("find_top_paths.mode"));
     }
 
     // Extract skip option (optional)
@@ -879,8 +1692,18 @@ QVariant CommandProcessor::handleAddContainer(const QVariantMap &params)
     // Create container object
     ContainerCore::Container container(containerJson);
 
-    // Add container to terminal
-    terminal->addContainer(container, addingTime);
+    // Extract arrival mode if provided
+    TransportationMode arrivalMode = TransportationMode::Any;
+    if (params.contains("arrival_mode")) {
+        arrivalMode = parseModeParam(params.value("arrival_mode"), true,
+                                     QStringLiteral("arrival_mode"));
+    }
+
+    // Add container to terminal with mode-specific delay
+    terminal->addContainer(container,
+                           addingTime,
+                           arrivalMode,
+                           arrivalSemanticsFromParams(params));
 
     return true;
 }

@@ -16,6 +16,10 @@ public:
     QString            to;             ///< Ending terminal name
     TransportationMode mode;           ///< Mode of transport
     double             weight;         ///< Cost of the segment
+    int                sequenceIndex = 0; ///< Zero-based traversal index
+    double             rankingCostContribution = 0.0;
+    double             weightedEdgeCost = 0.0;
+    double             weightedTerminalCostEmbeddedInSegment = 0.0;
     QString            fromTerminalId; ///< ID of start terminal
     QString            toTerminalId;   ///< ID of end terminal
     QVariantMap        attributes;     ///< Additional attributes
@@ -52,6 +56,11 @@ public:
         segmentObj["to"]               = to;
         segmentObj["mode"]             = static_cast<int>(mode);
         segmentObj["weight"]           = weight;
+        segmentObj["sequence_index"]   = sequenceIndex;
+        segmentObj["ranking_cost_contribution"] = rankingCostContribution;
+        segmentObj["weighted_edge_cost"] = weightedEdgeCost;
+        segmentObj["weighted_terminal_cost_embedded_in_segment"] =
+            weightedTerminalCostEmbeddedInSegment;
         segmentObj["from_terminal_id"] = fromTerminalId;
         segmentObj["to_terminal_id"]   = toTerminalId;
 

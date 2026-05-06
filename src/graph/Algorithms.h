@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Graph.h"
-#include <QDebug>
+#include "common/LogCategories.h"
 #include <algorithm>
 #include <limits>
 #include <queue>
@@ -62,7 +62,7 @@ public:
         if (distance.find(source) == distance.end()
             || distance.find(target) == distance.end())
         {
-            qDebug() << "Source or target vertex doesn't exist in the graph";
+            qCDebug(lcGraph) << "Source or target vertex doesn't exist in the graph";
             return std::nullopt;
         }
 
@@ -116,7 +116,7 @@ public:
         // If we didn't reach the target, no path exists
         if (distance[target] == infinity)
         {
-            qDebug() << "No path found from" << source << "to" << target;
+            qCDebug(lcGraph) << "No path found from" << source << "to" << target;
             return std::nullopt;
         }
 
@@ -157,7 +157,7 @@ public:
         auto firstPath = dijkstraShortestPath(graph, source, target, mode);
         if (!firstPath.has_value())
         {
-            qDebug() << "No path exists from" << source << "to" << target;
+            qCDebug(lcGraph) << "No path exists from" << source << "to" << target;
             return kPaths;
         }
 
@@ -252,7 +252,7 @@ public:
         auto firstPath = dijkstraShortestPath(graph, source, target, mode);
         if (!firstPath.has_value())
         {
-            qDebug() << "No path exists from" << source << "to" << target;
+            qCDebug(lcGraph) << "No path exists from" << source << "to" << target;
             return kPaths;
         }
 

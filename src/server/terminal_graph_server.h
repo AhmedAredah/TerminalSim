@@ -16,6 +16,8 @@
 
 namespace TerminalSim {
 
+class TerminalSimHealthControlPlane;
+
 /**
  * @brief Server class that manages a TerminalGraph
  *        and processes client requests
@@ -113,6 +115,7 @@ private:
     
     // RabbitMQ handler
     RabbitMQHandler* m_rabbitMQHandler;
+    TerminalSimHealthControlPlane* m_healthControlPlane;
     
     // Command processor
     CommandProcessor* m_commandProcessor;

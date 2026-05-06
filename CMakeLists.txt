@@ -39,18 +39,43 @@ else()
 endif()
 
 # Find RabbitMQ-C library
+set(RABBITMQ_CMAKE_DIR "" CACHE PATH
+    "Optional explicit path to the RabbitMQ-C CMake package directory")
+set(RABBITMQ_SEARCH_PATHS "")
+
 if(WIN32)
-    # Windows-specific paths
-    set(RABBITMQ_CMAKE_DIR "C:/Program Files/rabbitmq-c/lib/cmake/rabbitmq-c" CACHE PATH "Default path to RabbitMQ-C library on Windows")
+    list(APPEND RABBITMQ_SEARCH_PATHS
+        "${RABBITMQ_CMAKE_DIR}"
+        "C:/Program Files/rabbitmq-c/lib/cmake/rabbitmq-c")
 elseif(APPLE)
-    # macOS-specific paths
-    set(RABBITMQ_CMAKE_DIR "/usr/local/lib/rabbitmq-c/cmake" CACHE PATH "Default path to RabbitMQ-C library on macOS")
+    list(APPEND RABBITMQ_SEARCH_PATHS
+        "${RABBITMQ_CMAKE_DIR}"
+        "/usr/local/lib/rabbitmq-c/cmake"
+        "/usr/local/lib/cmake/rabbitmq-c")
 elseif(UNIX)
-    # Linux-specific paths
-    set(RABBITMQ_CMAKE_DIR "/usr/local/lib/cmake/rabbitmq-c" CACHE PATH "Default path to RabbitMQ-C library on Linux")
+    # Support the local split-install layout used by this environment, where
+    # release and debug RabbitMQ-C packages are deployed under /usr/local.
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        list(APPEND RABBITMQ_SEARCH_PATHS
+            "${RABBITMQ_CMAKE_DIR}"
+            "/usr/local/Debug/lib/cmake/rabbitmq-c"
+            "/usr/local/lib/cmake/rabbitmq-c"
+            "/usr/local/Release/lib/cmake/rabbitmq-c"
+            "/usr/lib/cmake/rabbitmq-c")
+    else()
+        list(APPEND RABBITMQ_SEARCH_PATHS
+            "${RABBITMQ_CMAKE_DIR}"
+            "/usr/local/Release/lib/cmake/rabbitmq-c"
+            "/usr/local/lib/cmake/rabbitmq-c"
+            "/usr/local/Debug/lib/cmake/rabbitmq-c"
+            "/usr/lib/cmake/rabbitmq-c")
+    endif()
 else()
     message(FATAL_ERROR "Unsupported platform. Please set paths for CONTAINER_CMAKE_DIR and RABBITMQ_CMAKE_DIR manually.")
 endif()
+
+list(FILTER RABBITMQ_SEARCH_PATHS EXCLUDE REGEX "^$")
+list(REMOVE_DUPLICATES RABBITMQ_SEARCH_PATHS)
 
 # Find the installed Container library
 set(CONTAINER_CMAKE_DIR "${CONTAINER_SEARCH_PATHS}" CACHE PATH "Path to Container library's CMake files")
@@ -65,21 +90,36 @@ if(NOT EXISTS "${CONTAINER_LIB_DIR}")
 endif()
 
 # Find RabbitMQ-C
-find_package(RabbitMQ-C REQUIRED CONFIG PATHS ${RABBITMQ_CMAKE_DIR})
+find_package(RabbitMQ-C REQUIRED CONFIG PATHS ${RABBITMQ_SEARCH_PATHS})
 if (NOT RabbitMQ-C_FOUND)
-    message(FATAL_ERROR "RabbitMQ-C not found. Please specify the correct path to the RabbitMQ-C cmake installation.")
+    message(FATAL_ERROR
+        "RabbitMQ-C not found. Checked: ${RABBITMQ_SEARCH_PATHS}. "
+        "Please specify the correct path to the RabbitMQ-C CMake installation.")
 endif()
 
-# Set and cache the path to the RabbitMQ bin directory using RABBITMQ_CMAKE_DIR
-if(WIN32)
-    # For Windows, use /bin
-    set(RABBITMQ_SHRD_LIB_DIR "${RABBITMQ_CMAKE_DIR}/../../../bin" CACHE PATH "Path to the RabbitMQ-C library's bin directory")
-elseif(UNIX AND NOT APPLE)
-    # For Linux, use /lib or /lib64 (adjust based on your setup)
-    set(RABBITMQ_SHRD_LIB_DIR "${RABBITMQ_CMAKE_DIR}/../../" CACHE PATH "Path to the RabbitMQ-C library's bin directory")
-elseif(APPLE)
-    # For macOS, use /lib or /lib64 (adjust based on your setup)
-    set(RABBITMQ_SHRD_LIB_DIR "${RABBITMQ_CMAKE_DIR}/../../" CACHE PATH "Path to the RabbitMQ-C library's bin directory")
+# Derive the RabbitMQ shared-library directory from the imported target that
+# was actually found, instead of assuming a fixed install layout.
+set(_rabbitmq_imported_location "")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    get_target_property(_rabbitmq_imported_location rabbitmq::rabbitmq IMPORTED_LOCATION_DEBUG)
+endif()
+if(NOT _rabbitmq_imported_location)
+    get_target_property(_rabbitmq_imported_location rabbitmq::rabbitmq IMPORTED_LOCATION_RELEASE)
+endif()
+if(NOT _rabbitmq_imported_location)
+    get_target_property(_rabbitmq_imported_location rabbitmq::rabbitmq IMPORTED_LOCATION_RELWITHDEBINFO)
+endif()
+if(NOT _rabbitmq_imported_location)
+    get_target_property(_rabbitmq_imported_location rabbitmq::rabbitmq IMPORTED_LOCATION_MINSIZEREL)
+endif()
+if(NOT _rabbitmq_imported_location)
+    get_target_property(_rabbitmq_imported_location rabbitmq::rabbitmq IMPORTED_LOCATION)
+endif()
+
+if(_rabbitmq_imported_location)
+    get_filename_component(_rabbitmq_lib_dir "${_rabbitmq_imported_location}" DIRECTORY)
+    set(RABBITMQ_SHRD_LIB_DIR "${_rabbitmq_lib_dir}" CACHE PATH
+        "Path to the RabbitMQ-C shared library directory" FORCE)
 endif()
 
 # Add compile options
@@ -103,7 +143,8 @@ include_directories(
 
 # Add subdirectories
 add_subdirectory(src)
-# add_subdirectory(tests)
+enable_testing()
+add_subdirectory(tests)
 add_subdirectory(examples)
 
 # Install targets

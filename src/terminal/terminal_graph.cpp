@@ -1,7 +1,6 @@
 #include "terminal_graph.h"
 
 #include <QCoreApplication>
-#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -10,63 +9,409 @@
 #include <QPair>
 #include <QQueue>
 #include <QRandomGenerator>
+#include <QCryptographicHash>
 #include <QSet>
 #include <QThread>
+#include <QUrl>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
+#include "common/LogCategories.h"
+
 namespace TerminalSim
 {
+
+namespace {
+
+QString percentEncode(const QString &value)
+{
+    return QString::fromUtf8(QUrl::toPercentEncoding(value));
+}
+
+QString canonicalSegmentSignature(const QList<PathSegment> &segments)
+{
+    QString signature;
+    for (const PathSegment &segment : segments)
+    {
+        signature += segment.from + "->" + segment.to + ":"
+                     + QString::number(static_cast<int>(segment.mode)) + "|";
+    }
+    return signature;
+}
+
+QStringList routeAttributeKeys()
+{
+    return {QStringLiteral("cost"),
+            QStringLiteral("travelTime"),
+            QStringLiteral("distance"),
+            QStringLiteral("carbonEmissions"),
+            QStringLiteral("risk"),
+            QStringLiteral("energyConsumption")};
+}
+
+QStringList costAttributeKeys()
+{
+    QStringList keys = routeAttributeKeys();
+    keys << QStringLiteral("terminal_delay")
+         << QStringLiteral("terminal_cost");
+    return keys;
+}
+
+QVariantMap defaultLinkAttributes()
+{
+    return {{QStringLiteral("cost"), 1.0},
+            {QStringLiteral("travelTime"), 1.0},
+            {QStringLiteral("distance"), 1.0},
+            {QStringLiteral("carbonEmissions"), 1.0},
+            {QStringLiteral("risk"), 1.0},
+            {QStringLiteral("energyConsumption"), 1.0}};
+}
+
+QVariantMap defaultCostFunctionParameters()
+{
+    const QVariantMap weights{
+        {QStringLiteral("cost"), 1.0},
+        {QStringLiteral("travelTime"), 1.0},
+        {QStringLiteral("distance"), 1.0},
+        {QStringLiteral("carbonEmissions"), 1.0},
+        {QStringLiteral("risk"), 1.0},
+        {QStringLiteral("energyConsumption"), 1.0},
+        {QStringLiteral("terminal_delay"), 1.0},
+        {QStringLiteral("terminal_cost"), 1.0}};
+
+    return {{QStringLiteral("default"), weights},
+            {QString::number(static_cast<int>(TransportationMode::Ship)), weights},
+            {QString::number(static_cast<int>(TransportationMode::Train)), weights},
+            {QString::number(static_cast<int>(TransportationMode::Truck)), weights}};
+}
+
+double numericAttributeValue(const QVariant &value, const QString &context)
+{
+    bool ok = false;
+    const double parsed = value.toDouble(&ok);
+    if (!ok || !std::isfinite(parsed))
+    {
+        throw std::invalid_argument(
+            QString("Invalid numeric value for %1").arg(context).toStdString());
+    }
+    return parsed;
+}
+
+void validateNonNegative(double value, const QString &context)
+{
+    if (value < 0.0)
+    {
+        throw std::invalid_argument(
+            QString("Negative value is not allowed for %1")
+                .arg(context)
+                .toStdString());
+    }
+}
+
+QVariantMap validatedAttributeMap(const QVariantMap &attrs,
+                                  const QStringList &allowedKeys,
+                                  const QStringList &requiredKeys,
+                                  const QString     &context)
+{
+    const QSet<QString> allowed(allowedKeys.cbegin(), allowedKeys.cend());
+    QVariantMap validated;
+
+    for (auto it = attrs.constBegin(); it != attrs.constEnd(); ++it)
+    {
+        if (!allowed.contains(it.key()))
+        {
+            throw std::invalid_argument(
+                QString("Unknown numeric attribute '%1' in %2")
+                    .arg(it.key(), context)
+                    .toStdString());
+        }
+
+        const double value =
+            numericAttributeValue(it.value(), context + "." + it.key());
+        validateNonNegative(value, context + "." + it.key());
+        validated.insert(it.key(), value);
+    }
+
+    for (const QString &key : requiredKeys)
+    {
+        if (!validated.contains(key))
+        {
+            throw std::invalid_argument(
+                QString("Missing required attribute '%1' in %2")
+                    .arg(key, context)
+                    .toStdString());
+        }
+    }
+
+    return validated;
+}
+
+QVariantMap validatedRouteAttributes(const QVariantMap &attrs,
+                                     const QVariantMap &defaults,
+                                     const QString     &context)
+{
+    QVariantMap merged = validatedAttributeMap(
+        defaults, routeAttributeKeys(), routeAttributeKeys(),
+        context + QStringLiteral(".defaults"));
+
+    const QVariantMap overrides = validatedAttributeMap(
+        attrs, routeAttributeKeys(), {}, context);
+    for (auto it = overrides.constBegin(); it != overrides.constEnd(); ++it)
+        merged[it.key()] = it.value();
+
+    return merged;
+}
+
+void validateCostFunctionParameters(const QVariantMap &params)
+{
+    const QStringList requiredModes = {
+        QStringLiteral("default"),
+        QString::number(static_cast<int>(TransportationMode::Ship)),
+        QString::number(static_cast<int>(TransportationMode::Train)),
+        QString::number(static_cast<int>(TransportationMode::Truck))};
+
+    for (auto it = params.constBegin(); it != params.constEnd(); ++it)
+    {
+        if (!requiredModes.contains(it.key()))
+        {
+            throw std::invalid_argument(
+                QString("Unknown cost-function mode key: %1")
+                    .arg(it.key())
+                    .toStdString());
+        }
+    }
+
+    for (const QString &mode : requiredModes)
+    {
+        if (!params.contains(mode) || !params.value(mode).canConvert<QVariantMap>())
+        {
+            throw std::invalid_argument(
+                QString("Missing cost-function parameters for mode: %1")
+                    .arg(mode)
+                    .toStdString());
+        }
+
+        validatedAttributeMap(params.value(mode).toMap(),
+                              costAttributeKeys(),
+                              costAttributeKeys(),
+                              QStringLiteral("cost_function[%1]").arg(mode));
+    }
+}
+
+bool isConcreteMode(TransportationMode mode)
+{
+    return mode == TransportationMode::Ship
+        || mode == TransportationMode::Truck
+        || mode == TransportationMode::Train;
+}
+
+TransportationMode parseModeVariant(const QVariant &value,
+                                    const QString  &context,
+                                    bool            allowAny)
+{
+    TransportationMode mode;
+    if (value.typeId() == QMetaType::QString)
+    {
+        mode = EnumUtils::parseTransportationMode(value.toString());
+    }
+    else if (value.canConvert<int>())
+    {
+        mode = EnumUtils::parseTransportationMode(
+            QString::number(value.toInt()));
+    }
+    else
+    {
+        throw std::invalid_argument(
+            QString("Invalid transportation mode for %1")
+                .arg(context)
+                .toStdString());
+    }
+
+    if (!allowAny && !isConcreteMode(mode))
+    {
+        throw std::invalid_argument(
+            QString("Concrete transportation mode required for %1")
+                .arg(context)
+                .toStdString());
+    }
+    return mode;
+}
+
+TerminalInterface parseInterfaceKey(const QString &key,
+                                    const QString &context)
+{
+    try
+    {
+        return EnumUtils::parseTerminalInterface(key);
+    }
+    catch (const std::invalid_argument &)
+    {
+        throw std::invalid_argument(
+            QString("Invalid terminal interface '%1' in %2")
+                .arg(key, context)
+                .toStdString());
+    }
+}
+
+bool interfaceSupportsMode(TerminalInterface interface,
+                           TransportationMode mode)
+{
+    switch (mode)
+    {
+        case TransportationMode::Truck:
+        case TransportationMode::Train:
+            return interface == TerminalInterface::LAND_SIDE;
+        case TransportationMode::Ship:
+            return interface == TerminalInterface::SEA_SIDE;
+        case TransportationMode::Any:
+            return false;
+    }
+    return false;
+}
+
+QMap<TerminalInterface, QSet<TransportationMode>>
+parseTerminalInterfaces(const QVariantMap &interfacesMap,
+                        const QString     &context)
+{
+    if (interfacesMap.isEmpty())
+    {
+        throw std::invalid_argument(
+            QString("At least one terminal interface must be provided for %1")
+                .arg(context)
+                .toStdString());
+    }
+
+    QMap<TerminalInterface, QSet<TransportationMode>> interfaces;
+    for (auto it = interfacesMap.constBegin(); it != interfacesMap.constEnd();
+         ++it)
+    {
+        const TerminalInterface interface =
+            parseInterfaceKey(it.key(), context);
+        const QVariantList modesList = it.value().toList();
+        if (modesList.isEmpty())
+        {
+            throw std::invalid_argument(
+                QString("Interface %1 has no modes in %2")
+                    .arg(it.key(), context)
+                    .toStdString());
+        }
+
+        QSet<TransportationMode> modes;
+        for (const QVariant &modeVar : modesList)
+        {
+            const TransportationMode mode =
+                parseModeVariant(modeVar, context, false);
+            if (!interfaceSupportsMode(interface, mode))
+            {
+                throw std::invalid_argument(
+                    QString("Mode %1 is not compatible with interface %2 in %3")
+                        .arg(EnumUtils::transportationModeToString(mode),
+                             EnumUtils::terminalInterfaceToString(interface),
+                             context)
+                        .toStdString());
+            }
+            modes.insert(mode);
+        }
+
+        interfaces[interface] = modes;
+    }
+
+    return interfaces;
+}
+
+QStringList parseTerminalNames(const QVariant &namesVar,
+                               const QString  &context)
+{
+    QStringList names;
+    if (namesVar.typeId() == QMetaType::QString)
+    {
+        names << namesVar.toString();
+    }
+    else if (namesVar.canConvert<QStringList>())
+    {
+        names = namesVar.toStringList();
+    }
+    else if (namesVar.canConvert<QVariantList>())
+    {
+        for (const QVariant &nameVar : namesVar.toList())
+        {
+            const QString name = nameVar.toString().trimmed();
+            if (!name.isEmpty())
+                names << name;
+        }
+    }
+    else
+    {
+        throw std::invalid_argument(
+            QString("terminal_names must be a string or list in %1")
+                .arg(context)
+                .toStdString());
+    }
+
+    names.removeDuplicates();
+    if (names.isEmpty())
+    {
+        throw std::invalid_argument(
+            QString("At least one terminal name must be provided in %1")
+                .arg(context)
+                .toStdString());
+    }
+    return names;
+}
+
+bool terminalSupportsMode(const Terminal *terminal, TransportationMode mode)
+{
+    if (!terminal || !isConcreteMode(mode))
+        return false;
+
+    const auto interfaces = terminal->getInterfaces();
+    for (auto it = interfaces.constBegin(); it != interfaces.constEnd(); ++it)
+    {
+        if (it.value().contains(mode) && interfaceSupportsMode(it.key(), mode))
+            return true;
+    }
+    return false;
+}
+
+QString buildPathUid(const Path &path)
+{
+    const QString policySignature =
+        path.skipSameModeTerminalDelaysAndCosts
+            ? QStringLiteral("legacy-same-mode-skip:on")
+            : QStringLiteral("legacy-same-mode-skip:off");
+    const QByteArray signatureHash =
+        QCryptographicHash::hash(
+            (canonicalSegmentSignature(path.segments)
+             + QStringLiteral("|policy=") + policySignature).toUtf8(),
+            QCryptographicHash::Sha256)
+            .toHex();
+
+    return QStringLiteral(
+               "pf|v2|start=%1|end=%2|mode=%3|policy=%4|sig=%5")
+        .arg(percentEncode(path.startTerminal),
+             percentEncode(path.endTerminal),
+             QString::number(path.requestedMode),
+             percentEncode(policySignature),
+             QString::fromLatin1(signatureHash));
+}
+
+double estimatedCostValue(const PathSegment &segment, const char *key)
+{
+    return segment.estimatedCost.value(QString::fromLatin1(key)).toDouble();
+}
+
+} // namespace
 
 TerminalGraph::TerminalGraph(const QString &dir)
     : QObject(nullptr)
     , m_pathToTerminalsDirectory(dir)
 {
-    // Initialize default cost function parameters
-    m_costFunctionParametersWeights = {
-        {"default", QVariantMap{{"cost", 1.0},
-                                {"travelTime", 1.0},
-                                {"distance", 1.0},
-                                {"carbonEmissions", 1.0},
-                                {"risk", 1.0},
-                                {"energyConsumption", 1.0},
-                                {"terminal_delay", 1.0},
-                                {"terminal_cost", 1.0}}},
-        {QString::number(static_cast<int>(TransportationMode::Ship)),
-         QVariantMap{{"cost", 1.0},
-                     {"travelTime", 1.0},
-                     {"distance", 1.0},
-                     {"carbonEmissions", 1.0},
-                     {"risk", 1.0},
-                     {"energyConsumption", 1.0},
-                     {"terminal_delay", 1.0},
-                     {"terminal_cost", 1.0}}},
-        {QString::number(static_cast<int>(TransportationMode::Train)),
-         QVariantMap{{"cost", 1.0},
-                     {"travelTime", 1.0},
-                     {"distance", 1.0},
-                     {"carbonEmissions", 1.0},
-                     {"risk", 1.0},
-                     {"energyConsumption", 1.0},
-                     {"terminal_delay", 1.0},
-                     {"terminal_cost", 1.0}}},
-        {QString::number(static_cast<int>(TransportationMode::Truck)),
-         QVariantMap{{"cost", 1.0},
-                     {"travelTime", 1.0},
-                     {"distance", 1.0},
-                     {"carbonEmissions", 1.0},
-                     {"risk", 1.0},
-                     {"energyConsumption", 1.0},
-                     {"terminal_delay", 1.0},
-                     {"terminal_cost", 1.0}}}};
+    m_costFunctionParametersWeights = defaultCostFunctionParameters();
+    m_defaultLinkAttributes = defaultLinkAttributes();
 
-    // Set default link attributes
-    m_defaultLinkAttributes = {{"cost", 1.0},     {"travelTime", 1.0},
-                               {"distance", 1.0}, {"carbonEmissions", 1.0},
-                               {"risk", 1.0},     {"energyConsumption", 1.0}};
-
-    qInfo() << "Graph initialized with dir:" << (dir.isEmpty() ? "None" : dir);
+    qCInfo(lcTerminalGraph) << "Graph initialized with dir:" << (dir.isEmpty() ? "None" : dir);
 }
 
 TerminalGraph::~TerminalGraph()
@@ -89,98 +434,60 @@ TerminalGraph::~TerminalGraph()
         delete term;
     }
 
-    qDebug() << "Graph destroyed";
+    qCDebug(lcTerminalGraph) << "Graph destroyed";
 }
 
 void TerminalGraph::setCostFunctionParameters(const QVariantMap &params)
 {
+    validateCostFunctionParameters(params);
     QMutexLocker locker(&m_mutex);
     m_costFunctionParametersWeights = params;
 }
 
 void TerminalGraph::setLinkDefaultAttributes(const QVariantMap &attrs)
 {
+    const QVariantMap validated = validatedAttributeMap(
+        attrs, routeAttributeKeys(), routeAttributeKeys(),
+        QStringLiteral("default_link_attributes"));
     QMutexLocker locker(&m_mutex);   // Ensure thread safety
-    m_defaultLinkAttributes = attrs; // Update attributes
+    m_defaultLinkAttributes = validated; // Update attributes
+}
+
+void TerminalGraph::resetConfigurationToDefaults()
+{
+    QMutexLocker locker(&m_mutex);
+    m_costFunctionParametersWeights = defaultCostFunctionParameters();
+    m_defaultLinkAttributes = defaultLinkAttributes();
 }
 
 Terminal *TerminalGraph::addTerminalInternal(const QVariantMap &terminalData)
 {
-    // Extract terminal names (assuming validation has been done)
-    QStringList terminalNames;
-    QVariant    namesVar = terminalData["terminal_names"];
-    if (namesVar.canConvert<QString>())
-    {
-        terminalNames << namesVar.toString();
-    }
-    else
-    {
-        terminalNames = namesVar.toStringList();
-    }
+    const QStringList terminalNames = parseTerminalNames(
+        terminalData.value(QStringLiteral("terminal_names")),
+        QStringLiteral("terminal"));
 
     QString     canonical    = terminalNames.first();
     QString     displayName  = terminalData["display_name"].toString();
     QVariantMap customConfig = terminalData["custom_config"].toMap();
     QString     region = terminalData.value("region", QString()).toString();
 
-    // Parse interfaces
-    QVariantMap interfacesMap = terminalData["terminal_interfaces"].toMap();
-    QMap<TerminalInterface, QSet<TransportationMode>> interfaces;
+    const auto interfaces = parseTerminalInterfaces(
+        terminalData.value(QStringLiteral("terminal_interfaces")).toMap(),
+        canonical);
 
-    for (auto it = interfacesMap.constBegin(); it != interfacesMap.constEnd();
-         ++it)
-    {
-        TerminalInterface interface;
-        bool              ok = false;
-
-        int interfaceInt = it.key().toInt(&ok);
-        if (ok)
-        {
-            interface = static_cast<TerminalInterface>(interfaceInt);
-        }
-        else
-        {
-            interface = EnumUtils::stringToTerminalInterface(it.key());
-        }
-
-        QSet<TransportationMode> modes;
-        QVariantList             modesList = it.value().toList();
-
-        for (const QVariant &modeVar : modesList)
-        {
-            TransportationMode mode;
-
-            if (modeVar.canConvert<int>())
-            {
-                mode = static_cast<TransportationMode>(modeVar.toInt());
-            }
-            else if (modeVar.canConvert<QString>())
-            {
-                mode =
-                    EnumUtils::stringToTransportationMode(modeVar.toString());
-            }
-            else
-            {
-                continue;
-            }
-
-            modes.insert(mode);
-        }
-
-        if (!modes.isEmpty())
-        {
-            interfaces[interface] = modes;
-        }
-    }
+    // Parse mode network aliases from custom config
+    auto modeNetworkAliases = Terminal::parseModeNetworkAliases(
+        customConfig.value("mode_network_aliases").toMap());
 
     // Create terminal
     Terminal *term = new Terminal(
-        canonical, displayName, interfaces,
-        QMap<QPair<TransportationMode, QString>, QString>(),
+        canonical, displayName, interfaces, modeNetworkAliases,
         customConfig.value("capacity").toMap(),
         customConfig.value("dwell_time").toMap(),
         customConfig.value("customs").toMap(),
-        customConfig.value("cost").toMap(), m_pathToTerminalsDirectory);
+        customConfig.value("cost").toMap(),
+        customConfig.value("system_dynamics").toMap(),
+        m_pathToTerminalsDirectory);
 
     // Add vertex to graph
     m_graph.addVertex(canonical);
@@ -208,8 +515,8 @@ Terminal *TerminalGraph::addTerminalInternal(const QVariantMap &terminalData)
     m_terminalData[canonical] = TerminalDetails{
         term->estimateContainerHandlingTime(), term->estimateContainerCost()};
 
-    qDebug() << "Added terminal" << canonical << "with"
-             << (terminalNames.size() - 1) << "aliases";
+    qCDebug(lcTerminalGraph) << "Added terminal" << canonical << "with"
+                             << (terminalNames.size() - 1) << "aliases";
 
     return term;
 }
@@ -227,28 +534,9 @@ Terminal *TerminalGraph::addTerminal(const QVariantMap &terminalData)
         throw std::invalid_argument("Missing required fields for terminal");
     }
 
-    // Extract terminal names for validation
-    QStringList terminalNames;
-    QVariant    namesVar = terminalData["terminal_names"];
-    if (namesVar.canConvert<QString>())
-    {
-        terminalNames << namesVar.toString();
-    }
-    else if (namesVar.canConvert<QStringList>())
-    {
-        terminalNames = namesVar.toStringList();
-    }
-    else
-    {
-        throw std::invalid_argument(
-            "terminal_names must be a string or list of strings");
-    }
-
-    if (terminalNames.isEmpty())
-    {
-        throw std::invalid_argument(
-            "At least one terminal name must be provided");
-    }
+    const QStringList terminalNames = parseTerminalNames(
+        terminalData.value(QStringLiteral("terminal_names")),
+        QStringLiteral("terminal"));
 
     QString canonical = terminalNames.first();
 
@@ -270,13 +558,9 @@ Terminal *TerminalGraph::addTerminal(const QVariantMap &terminalData)
         }
     }
 
-    // Validate terminal interfaces
-    QVariantMap interfacesMap = terminalData["terminal_interfaces"].toMap();
-    if (interfacesMap.isEmpty())
-    {
-        throw std::invalid_argument(
-            "At least one terminal interface must be provided");
-    }
+    parseTerminalInterfaces(
+        terminalData.value(QStringLiteral("terminal_interfaces")).toMap(),
+        canonical);
 
     return addTerminalInternal(terminalData);
 }
@@ -300,28 +584,9 @@ TerminalGraph::addTerminals(const QList<QVariantMap> &terminalsList)
             throw std::invalid_argument("Missing required fields for terminal");
         }
 
-        // Extract terminal names for validation
-        QStringList terminalNames;
-        QVariant    namesVar = terminalData["terminal_names"];
-        if (namesVar.canConvert<QString>())
-        {
-            terminalNames << namesVar.toString();
-        }
-        else if (namesVar.canConvert<QStringList>())
-        {
-            terminalNames = namesVar.toStringList();
-        }
-        else
-        {
-            throw std::invalid_argument(
-                "terminal_names must be a string or list of strings");
-        }
-
-        if (terminalNames.isEmpty())
-        {
-            throw std::invalid_argument(
-                "At least one terminal name must be provided");
-        }
+        const QStringList terminalNames = parseTerminalNames(
+            terminalData.value(QStringLiteral("terminal_names")),
+            QStringLiteral("terminal"));
 
         QString canonical = terminalNames.first();
 
@@ -336,6 +601,11 @@ TerminalGraph::addTerminals(const QList<QVariantMap> &terminalsList)
         // in the list
         for (const QString &name : terminalNames)
         {
+            if (m_terminalAliases.contains(name))
+            {
+                throw std::invalid_argument("Duplicate terminal name: "
+                                            + name.toStdString());
+            }
             if (allNames.contains(name))
             {
                 throw std::invalid_argument("Duplicate terminal name: "
@@ -344,13 +614,9 @@ TerminalGraph::addTerminals(const QList<QVariantMap> &terminalsList)
             allNames.insert(name);
         }
 
-        // Validate terminal interfaces
-        QVariantMap interfacesMap = terminalData["terminal_interfaces"].toMap();
-        if (interfacesMap.isEmpty())
-        {
-            throw std::invalid_argument(
-                "At least one terminal interface must be provided");
-        }
+        parseTerminalInterfaces(
+            terminalData.value(QStringLiteral("terminal_interfaces")).toMap(),
+            canonical);
     }
 
     // Add all terminals after validation
@@ -377,7 +643,7 @@ void TerminalGraph::addAliasToTerminal(const QString &name,
 
     m_terminalAliases[alias] = canonical;
     m_canonicalToAliases[canonical].insert(alias);
-    qDebug() << "Added alias" << alias << "to" << canonical;
+    qCDebug(lcTerminalGraph) << "Added alias" << alias << "to" << canonical;
 }
 
 QStringList TerminalGraph::getAliasesOfTerminal(const QString &name) const
@@ -392,6 +658,14 @@ TerminalGraph::addRouteInternal(const QString &id, const QString &start,
                                 const QString &end, TransportationMode mode,
                                 const QVariantMap &attrs)
 {
+    if (!isConcreteMode(mode))
+    {
+        throw std::invalid_argument(
+            QString("Route %1 requires a concrete transportation mode")
+                .arg(id)
+                .toStdString());
+    }
+
     QString startCanonical = m_terminalAliases.value(start, start);
     QString endCanonical   = m_terminalAliases.value(end, end);
 
@@ -401,12 +675,19 @@ TerminalGraph::addRouteInternal(const QString &id, const QString &start,
         throw std::invalid_argument("Terminal not found");
     }
 
-    // Merge default and provided attributes
-    QVariantMap routeAttrs = m_defaultLinkAttributes;
-    for (auto it = attrs.begin(); it != attrs.end(); ++it)
+    if (!terminalSupportsMode(m_terminals.value(startCanonical), mode)
+        || !terminalSupportsMode(m_terminals.value(endCanonical), mode))
     {
-        routeAttrs[it.key()] = it.value();
+        throw std::invalid_argument(
+            QString("Route %1 uses mode %2 but one or both endpoint terminals "
+                    "do not support that mode/interface")
+                .arg(id, EnumUtils::transportationModeToString(mode))
+                .toStdString());
     }
+
+    const QVariantMap routeAttrs = validatedRouteAttributes(
+        attrs, m_defaultLinkAttributes,
+        QStringLiteral("route '%1'").arg(id));
 
     // Create edge data with the same ID for both directions
     EdgeData edgeData = {id, mode, routeAttrs};
@@ -469,8 +750,8 @@ TerminalGraph::addRouteInternal(const QString &id, const QString &start,
 
     // Prepare parameters for cost function
     QVariantMap params       = routeAttrs;
-    params["terminal_delay"] = delay;
-    params["terminal_cost"]  = terminalCost;
+    params["terminal_delay"] = delay;           // seconds; sum of both endpoints' handlingTime
+    params["terminal_cost"]  = terminalCost;    // USD per container
 
     // Compute total cost
     double cost = computeCost(params, m_costFunctionParametersWeights, mode);
@@ -479,8 +760,8 @@ TerminalGraph::addRouteInternal(const QString &id, const QString &start,
     m_graph.addEdge(startCanonical, endCanonical, cost, mode);
     m_graph.addEdge(endCanonical, startCanonical, cost, mode);
 
-    qDebug() << "Added bidirectional route" << id << "between" << startCanonical
-             << "and" << endCanonical << "with mode" << static_cast<int>(mode);
+    qCDebug(lcTerminalGraph) << "Added bidirectional route" << id << "between" << startCanonical
+                             << "and" << endCanonical << "with mode" << static_cast<int>(mode);
     return {startCanonical, endCanonical};
 }
 
@@ -499,6 +780,15 @@ TerminalGraph::addRoutes(const QList<QVariantMap> &routesList)
 {
     QMutexLocker                   locker(&m_mutex);
     QList<QPair<QString, QString>> addedRoutes;
+    struct ValidatedRoute
+    {
+        QString            id;
+        QString            start;
+        QString            end;
+        TransportationMode mode;
+        QVariantMap        attrs;
+    };
+    QList<ValidatedRoute> validatedRoutes;
 
     // First validate all routes
     for (const QVariantMap &routeData : routesList)
@@ -516,6 +806,12 @@ TerminalGraph::addRoutes(const QList<QVariantMap> &routesList)
         QString start = routeData["start_terminal"].toString();
         QString end   = routeData["end_terminal"].toString();
         QString id    = routeData["route_id"].toString();
+        if (id.trimmed().isEmpty() || start.trimmed().isEmpty()
+            || end.trimmed().isEmpty())
+        {
+            throw std::invalid_argument(
+                "Route id, start terminal, and end terminal must be provided");
+        }
 
         QString startCanonical = getCanonicalName(start);
         QString endCanonical   = getCanonicalName(end);
@@ -526,31 +822,21 @@ TerminalGraph::addRoutes(const QList<QVariantMap> &routesList)
             throw std::invalid_argument("Terminal not found for route ID: "
                                         + id.toStdString());
         }
-    }
-
-    // Add all routes
-    for (const QVariantMap &routeData : routesList)
-    {
-        QString id    = routeData["route_id"].toString();
-        QString start = routeData["start_terminal"].toString();
-        QString end   = routeData["end_terminal"].toString();
 
         // Parse mode
-        TransportationMode mode;
-        QVariant           modeVar = routeData["mode"];
+        const TransportationMode mode = parseModeVariant(
+            routeData.value(QStringLiteral("mode")),
+            QStringLiteral("route '%1'").arg(id),
+            false);
 
-        if (modeVar.canConvert<int>())
+        if (!terminalSupportsMode(m_terminals.value(startCanonical), mode)
+            || !terminalSupportsMode(m_terminals.value(endCanonical), mode))
         {
-            mode = static_cast<TransportationMode>(modeVar.toInt());
-        }
-        else if (modeVar.canConvert<QString>())
-        {
-            mode = EnumUtils::stringToTransportationMode(modeVar.toString());
-        }
-        else
-        {
-            throw std::invalid_argument("Invalid mode parameter for route ID: "
-                                        + id.toStdString());
+            throw std::invalid_argument(
+                QString("Route %1 uses mode %2 but one or both endpoint "
+                        "terminals do not support that mode/interface")
+                    .arg(id, EnumUtils::transportationModeToString(mode))
+                    .toStdString());
         }
 
         // Get attributes
@@ -560,10 +846,22 @@ TerminalGraph::addRoutes(const QList<QVariantMap> &routesList)
         {
             attrs = routeData["attributes"].toMap();
         }
+        const QVariantMap validatedAttrs = validatedRouteAttributes(
+            attrs, m_defaultLinkAttributes,
+            QStringLiteral("route '%1'").arg(id));
 
+        validatedRoutes.append(
+            ValidatedRoute{id, start, end, mode, validatedAttrs});
+    }
+
+    // Add all routes after complete validation so a bad batch leaves topology
+    // unchanged.
+    for (const ValidatedRoute &routeData : validatedRoutes)
+    {
         // Add the route
         QPair<QString, QString> route =
-            addRouteInternal(id, start, end, mode, attrs);
+            addRouteInternal(routeData.id, routeData.start, routeData.end,
+                             routeData.mode, routeData.attrs);
         addedRoutes.append(route);
     }
 
@@ -629,16 +927,14 @@ bool TerminalGraph::removeTerminal(const QString &name)
             m_edgeData.remove(edge);
         }
 
-        // Terminal from graph
-        // Note: If the vertex doesn't exist, addVertex simply returns false
-        // but doesn't throw an exception.
-        m_graph.addVertex(canonical);
+        m_graph.removeVertex(canonical);
 
         // Remove terminal from map (but don't delete yet)
         m_terminals.remove(canonical);
 
         // Remove node attributes
         m_nodeAttributes.remove(canonical);
+        m_terminalData.remove(canonical);
 
         success = true;
     }
@@ -646,7 +942,7 @@ bool TerminalGraph::removeTerminal(const QString &name)
     // Delete the terminal after releasing the lock
     delete termToDelete;
 
-    qDebug() << "Removed terminal" << name;
+    qCDebug(lcTerminalGraph) << "Removed terminal" << name;
     return success;
 }
 
@@ -700,6 +996,7 @@ void TerminalGraph::clear()
         m_canonicalToAliases.clear();
         m_nodeAttributes.clear();
         m_edgeData.clear();
+        m_terminalData.clear();
 
         // Clear the graph
         m_graph = GraphType();
@@ -711,7 +1008,61 @@ void TerminalGraph::clear()
         delete term;
     }
 
-    qDebug() << "Graph cleared";
+    qCDebug(lcTerminalGraph) << "Graph cleared";
+}
+
+int TerminalGraph::resetRuntimeState(const QStringList &terminalIds)
+{
+    QList<Terminal *> terminalsToReset;
+    QStringList       resolvedTerminalIds;
+
+    {
+        QMutexLocker locker(&m_mutex);
+
+        if (terminalIds.isEmpty())
+        {
+            for (auto it = m_terminals.constBegin();
+                 it != m_terminals.constEnd(); ++it)
+            {
+                terminalsToReset.append(it.value());
+                resolvedTerminalIds.append(it.key());
+            }
+        }
+        else
+        {
+            QSet<QString> seen;
+            for (const QString &terminalId : terminalIds)
+            {
+                const QString canonical =
+                    getCanonicalName(terminalId.trimmed());
+                if (canonical.isEmpty())
+                    continue;
+                if (!m_terminals.contains(canonical))
+                {
+                    throw std::invalid_argument(
+                        QString("Terminal not found: %1")
+                            .arg(terminalId)
+                            .toStdString());
+                }
+                if (seen.contains(canonical))
+                    continue;
+
+                seen.insert(canonical);
+                terminalsToReset.append(m_terminals.value(canonical));
+                resolvedTerminalIds.append(canonical);
+            }
+        }
+    }
+
+    for (Terminal *terminal : terminalsToReset)
+    {
+        if (terminal)
+            terminal->resetRuntimeState();
+    }
+
+    qCInfo(lcTerminalGraph) << "Runtime state reset for terminals:"
+                            << resolvedTerminalIds;
+    return terminalsToReset.size();
 }
 
 QVariantMap TerminalGraph::getTerminalStatus(const QString &name) const
@@ -811,12 +1162,31 @@ double TerminalGraph::computeCost(const QVariantMap &params,
 
     for (auto it = params.begin(); it != params.end(); ++it)
     {
-        bool   ok;
-        double value = it.value().toDouble(&ok);
-        if (!ok)
-            continue;
+        if (!costAttributeKeys().contains(it.key()))
+        {
+            throw std::invalid_argument(
+                QString("Unknown cost attribute in cost computation: %1")
+                    .arg(it.key())
+                    .toStdString());
+        }
 
-        double weight     = modeWeights.value(it.key(), 1.0).toDouble();
+        if (!modeWeights.contains(it.key()))
+        {
+            throw std::invalid_argument(
+                QString("Missing cost-function weight for attribute: %1")
+                    .arg(it.key())
+                    .toStdString());
+        }
+
+        const double value = numericAttributeValue(
+            it.value(), QStringLiteral("cost.%1").arg(it.key()));
+        validateNonNegative(value,
+                            QStringLiteral("cost.%1").arg(it.key()));
+        const double weight = numericAttributeValue(
+            modeWeights.value(it.key()),
+            QStringLiteral("weight.%1").arg(it.key()));
+        validateNonNegative(weight,
+                            QStringLiteral("weight.%1").arg(it.key()));
         double factorCost = weight * value;
         cost += factorCost;
     }
@@ -824,10 +1194,12 @@ double TerminalGraph::computeCost(const QVariantMap &params,
     return cost;
 }
 
-void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
-                                     bool isEnd, bool skipStartTerminal,
-                                     bool skipEndTerminal, const QString &from,
-                                     const QString &to, TransportationMode mode,
+void TerminalGraph::buildPathSegment(PathSegment &segment, int sequenceIndex,
+                                     bool isStart, bool isEnd,
+                                     bool skipStartTerminal,
+                                     bool skipEndTerminal,
+                                     const QString &from, const QString &to,
+                                     TransportationMode mode,
                                      const QVariantMap &attributes) const
 {
     segment.from           = from;
@@ -835,7 +1207,7 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     segment.fromTerminalId = from;
     segment.toTerminalId   = to;
     segment.mode           = mode;
-    // segment.attributes     = attributes;
+    segment.sequenceIndex  = sequenceIndex;
 
     // Get terminal data safely
     double fromHandlingTime = 0.0;
@@ -852,11 +1224,7 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     }
 
     // Store estimated raw values
-    segment.estimatedValues                          = attributes;
-    segment.estimatedValues["previousTerminalDelay"] = fromHandlingTime;
-    segment.estimatedValues["previousTerminalCost"]  = fromCost;
-    segment.estimatedValues["nextTerminalDelay"]     = toHandlingTime;
-    segment.estimatedValues["nextTerminalCost"]      = toCost;
+    segment.estimatedValues = attributes;
 
     // Prepare complete params for cost computation
     QVariantMap params       = attributes;
@@ -870,43 +1238,32 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
         costFunctionWeights = m_costFunctionParametersWeights;
     }
 
-    // Compute total cost
-    double totalWeight = 0.0;
-    // segment.weight =
-    //     computeCost(params, costFunctionWeights, mode);
-
     // Calculate detailed cost breakdown
     double carbonEmissions =
         computeCost({{"carbonEmissions", params["carbonEmissions"]}},
                     costFunctionWeights, mode);
     segment.estimatedCost["carbonEmissions"] = carbonEmissions;
-    totalWeight += carbonEmissions;
 
     double directCost =
         computeCost({{"cost", params["cost"]}}, costFunctionWeights, mode);
     segment.estimatedCost["cost"] = directCost;
-    totalWeight += directCost;
 
     double distance = computeCost({{"distance", params["distance"]}},
                                   costFunctionWeights, mode);
     segment.estimatedCost["distance"] = distance;
-    totalWeight += distance;
 
     double energyConsumption =
         computeCost({{"energyConsumption", params["energyConsumption"]}},
                     costFunctionWeights, mode);
     segment.estimatedCost["energyConsumption"] = energyConsumption;
-    totalWeight += energyConsumption;
 
     double risk =
         computeCost({{"risk", params["risk"]}}, costFunctionWeights, mode);
     segment.estimatedCost["risk"] = risk;
-    totalWeight += risk;
 
     double travelTime = computeCost({{"travelTime", params["travelTime"]}},
                                     costFunctionWeights, mode);
     segment.estimatedCost["travelTime"] = travelTime;
-    totalWeight += travelTime;
 
     double previousTerminalDelay = 0.0;
     if (!skipStartTerminal)
@@ -916,7 +1273,6 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     }
     previousTerminalDelay =
         isStart ? previousTerminalDelay : previousTerminalDelay / 2;
-    totalWeight += previousTerminalDelay;
     segment.estimatedCost["previousTerminalDelay"] = previousTerminalDelay;
 
     double previousTerminalCost = 0.0;
@@ -928,7 +1284,6 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     previousTerminalCost =
         isStart ? previousTerminalCost : previousTerminalCost / 2;
     segment.estimatedCost["previousTerminalCost"] = previousTerminalCost;
-    totalWeight += previousTerminalCost;
 
     double nextTerminalDelay = 0.0;
     if (!skipEndTerminal)
@@ -938,7 +1293,6 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     }
     nextTerminalDelay = isEnd ? nextTerminalDelay : nextTerminalDelay / 2;
     segment.estimatedCost["nextTerminalDelay"] = nextTerminalDelay;
-    totalWeight += nextTerminalDelay;
 
     double nextTerminalCost = 0.0;
     if (!skipEndTerminal)
@@ -948,9 +1302,17 @@ void TerminalGraph::buildPathSegment(PathSegment &segment, bool isStart,
     }
     nextTerminalCost = isEnd ? nextTerminalCost : nextTerminalCost / 2;
     segment.estimatedCost["nextTerminalCost"] = nextTerminalCost;
-    totalWeight += nextTerminalCost;
 
-    segment.weight = totalWeight;
+    segment.weightedEdgeCost =
+        carbonEmissions + directCost + distance + energyConsumption
+        + risk + travelTime;
+    segment.weightedTerminalCostEmbeddedInSegment =
+        previousTerminalDelay + previousTerminalCost + nextTerminalDelay
+        + nextTerminalCost;
+    segment.rankingCostContribution =
+        segment.weightedEdgeCost
+        + segment.weightedTerminalCostEmbeddedInSegment;
+    segment.weight = segment.rankingCostContribution;
 }
 
 void TerminalGraph::updateGraph(TransportationMode requestedMode)
@@ -1028,25 +1390,30 @@ void TerminalGraph::updateGraph(TransportationMode requestedMode)
 }
 
 Path TerminalGraph::convertEdgePathToTerminalPath(
-    const EdgePathInfoType &pathInfo, int pathId,
+    const EdgePathInfoType &pathInfo, int displayPathId,
     TransportationMode requestedMode, bool skipDelays) const
 {
     Path path;
-    path.pathId             = pathId;
+    path.pathId             = displayPathId;
     path.totalEdgeCosts     = 0;
     path.totalTerminalCosts = 0;
     path.totalPathCost      = 0;
-    path.costBreakdown      = QVariantMap();
-
-    // Initialize cost breakdown categories
-    QStringList costCategories = {
-        "carbonEmissions",   "cost",         "distance",
-        "energyConsumption", "risk",         "travelTime",
-        "terminal_delay",    "terminal_cost"};
-    for (const QString &category : costCategories)
-    {
-        path.costBreakdown[category] = 0.0;
-    }
+    path.rankingCost        = 0;
+    path.requestedMode      = static_cast<int>(requestedMode);
+    path.costBreakdown = QVariantMap{
+        {QStringLiteral("weighted_edge"),
+         QVariantMap{
+             {QStringLiteral("carbonEmissions"), 0.0},
+             {QStringLiteral("cost"), 0.0},
+             {QStringLiteral("distance"), 0.0},
+             {QStringLiteral("energyConsumption"), 0.0},
+             {QStringLiteral("risk"), 0.0},
+             {QStringLiteral("travelTime"), 0.0}}},
+        {QStringLiteral("weighted_terminal"),
+         QVariantMap{
+             {QStringLiteral("delay"), 0.0},
+             {QStringLiteral("direct_cost"), 0.0}}}
+    };
 
     // Extract edges from path
     const auto &edges = pathInfo.first;
@@ -1058,14 +1425,12 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
     }
 
     // Copy necessary data while holding the lock
-    QHash<EdgeIdentifier, QList<EdgeData>>          edgeDataCopy;
-    QHash<QString, Terminal *>                      terminalsCopy;
-    QHash<QString, TerminalDetails>                 terminalData;
+    QHash<EdgeIdentifier, QList<EdgeData>> edgeDataCopy;
+    QHash<QString, TerminalDetails>        terminalData;
 
     {
         QMutexLocker locker(&m_mutex);
         edgeDataCopy  = m_edgeData;
-        terminalsCopy = m_terminals;
         terminalData  = m_terminalData;
     }
 
@@ -1074,16 +1439,23 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
 
     // Add first terminal (source of first edge)
     QString firstTerminalName = edges[0].source();
+    path.startTerminal        = firstTerminalName;
+    path.endTerminal          = edges.back().target();
 
     double firstHandlingTime = terminalData[firstTerminalName].handlingTime;
     double firstCost         = terminalData[firstTerminalName].handlingCost;
 
     QVariantMap terminalInfo;
-    terminalInfo["terminal"]      = firstTerminalName;
+    terminalInfo["terminal"] = firstTerminalName;
+    terminalInfo["terminal_id"] = firstTerminalName;
+    terminalInfo["sequence_index"] = 0;
     terminalInfo["handling_time"] = firstHandlingTime;
-    terminalInfo["cost"]          = firstCost;
-    terminalInfo["costs_skipped"] =
-        true; // Origin terminal costs skipped by default
+    terminalInfo["cost"] = firstCost;
+    terminalInfo["costs_skipped"] = true;
+    terminalInfo["skip_reason"] = QStringLiteral("origin_terminal");
+    terminalInfo["weighted_terminal_delay_contribution"] = 0.0;
+    terminalInfo["weighted_terminal_cost_contribution"] = 0.0;
+    terminalInfo["weighted_terminal_total_contribution"] = 0.0;
 
     terminalsInPath.append(terminalInfo);
 
@@ -1106,7 +1478,7 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
         }
         if (i > 0)
         {
-            const auto        &prevEdge = edges[i + 1];
+            const auto        &prevEdge = edges[i - 1];
             TransportationMode prevMode = prevEdge.mode();
             skipPreviousTerminalCost    = (mode == prevMode);
         }
@@ -1116,8 +1488,8 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
 
         if (!edgeDataCopy.contains(edgeKey))
         {
-            qWarning() << "Edge data not found for path segment" << fromName
-                       << "->" << toName;
+            qCWarning(lcTerminalGraph) << "Edge data not found for path segment" << fromName
+                                       << "->" << toName;
             continue;
         }
 
@@ -1139,8 +1511,8 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
 
         if (!found)
         {
-            qWarning() << "No matching edge found for mode"
-                       << static_cast<int>(requestedMode);
+            qCWarning(lcTerminalGraph) << "No matching edge found for mode"
+                                       << static_cast<int>(requestedMode);
             continue;
         }
 
@@ -1150,67 +1522,150 @@ Path TerminalGraph::convertEdgePathToTerminalPath(
         {
             skipPreviousTerminalCost = true;
         }
-        if (isEnd)
-        {
-            skipNextTerminalCost = true;
-        }
         // Create path segment
         PathSegment segment;
-        buildPathSegment(segment, isStart, isEnd, skipPreviousTerminalCost,
+        buildPathSegment(segment, static_cast<int>(i), isStart, isEnd,
+                         skipPreviousTerminalCost,
                          skipNextTerminalCost, fromName, toName, edgeData.mode,
                          edgeData.attributes);
         path.segments.append(segment);
 
-        // Add to total costs
-        path.totalEdgeCosts += segment.weight;
+        // Add to path-level weighted costs
+        path.totalEdgeCosts += segment.weightedEdgeCost;
+        path.rankingCost += segment.rankingCostContribution;
 
-        // Add cost breakdown
-        for (auto it = segment.estimatedCost.begin();
-             it != segment.estimatedCost.end(); ++it)
+        QVariantMap weightedEdge =
+            path.costBreakdown.value(QStringLiteral("weighted_edge")).toMap();
+        for (const QString &category : {QStringLiteral("carbonEmissions"),
+                                        QStringLiteral("cost"),
+                                        QStringLiteral("distance"),
+                                        QStringLiteral("energyConsumption"),
+                                        QStringLiteral("risk"),
+                                        QStringLiteral("travelTime")})
         {
-            QString category = it.key();
-            double  value    = it.value().toDouble();
-
-            if (path.costBreakdown.contains(category))
-            {
-                path.costBreakdown[category] =
-                    path.costBreakdown[category].toDouble() + value;
-            }
-            else
-            {
-                path.costBreakdown[category] = value;
-            }
+            weightedEdge[category] =
+                weightedEdge.value(category).toDouble()
+                + segment.estimatedCost.value(category).toDouble();
         }
+        path.costBreakdown[QStringLiteral("weighted_edge")] = weightedEdge;
 
         // Add destination terminal info
         double handlingTime = terminalData[toName].handlingTime;
         double cost         = terminalData[toName].handlingCost;
 
         QVariantMap terminalInfo;
-        terminalInfo["terminal"]      = toName;
+        terminalInfo["terminal"] = toName;
+        terminalInfo["terminal_id"] = toName;
+        terminalInfo["sequence_index"] = static_cast<int>(i) + 1;
         terminalInfo["handling_time"] = handlingTime;
-        terminalInfo["cost"]          = cost;
+        terminalInfo["cost"] = cost;
 
         // Determine if costs should be skipped
         bool skipCosts = false;
-        if (skipDelays && i > 0)
+        QString skipReason;
+        if (skipDelays && i < edges.size() - 1)
         {
-            // Skip costs if consecutive segments use the same mode
-            skipCosts = (path.segments[i].mode == path.segments[i - 1].mode);
+            // The terminal created on iteration i is the destination of edge i
+            // and the origin of edge i+1, so same-mode continuation is a
+            // forward-looking comparison.
+            skipCosts = (edges[i].mode() == edges[i + 1].mode());
+            if (skipCosts)
+            {
+                skipReason = QStringLiteral("same_mode_continuation");
+            }
         }
 
         terminalInfo["costs_skipped"] = skipCosts;
+        if (!skipReason.isEmpty())
+        {
+            terminalInfo["skip_reason"] = skipReason;
+        }
+        terminalInfo["weighted_terminal_delay_contribution"] = 0.0;
+        terminalInfo["weighted_terminal_cost_contribution"] = 0.0;
+        terminalInfo["weighted_terminal_total_contribution"] = 0.0;
         terminalsInPath.append(terminalInfo);
 
-        // Add terminal costs if not skipped
-        if (!skipCosts)
-        {
-            path.totalTerminalCosts += cost;
-        }
+        const double previousDelayShare =
+            estimatedCostValue(segment, "previousTerminalDelay");
+        const double previousCostShare =
+            estimatedCostValue(segment, "previousTerminalCost");
+        const double nextDelayShare =
+            estimatedCostValue(segment, "nextTerminalDelay");
+        const double nextCostShare =
+            estimatedCostValue(segment, "nextTerminalCost");
+
+        path.weightedTerminalDelayTotal += previousDelayShare + nextDelayShare;
+        path.weightedTerminalDirectCostTotal += previousCostShare
+                                                + nextCostShare;
+
+        QVariantMap previousTerminal = terminalsInPath[static_cast<int>(i)];
+        previousTerminal["weighted_terminal_delay_contribution"] =
+            previousTerminal
+                .value(QStringLiteral("weighted_terminal_delay_contribution"))
+                .toDouble()
+            + previousDelayShare;
+        previousTerminal["weighted_terminal_cost_contribution"] =
+            previousTerminal
+                .value(QStringLiteral("weighted_terminal_cost_contribution"))
+                .toDouble()
+            + previousCostShare;
+        previousTerminal["weighted_terminal_total_contribution"] =
+            previousTerminal
+                .value(QStringLiteral("weighted_terminal_delay_contribution"))
+                .toDouble()
+            + previousTerminal
+                .value(QStringLiteral("weighted_terminal_cost_contribution"))
+                .toDouble();
+        terminalsInPath[static_cast<int>(i)] = previousTerminal;
+
+        QVariantMap currentTerminal = terminalsInPath.back();
+        currentTerminal["weighted_terminal_delay_contribution"] =
+            currentTerminal
+                .value(QStringLiteral("weighted_terminal_delay_contribution"))
+                .toDouble()
+            + nextDelayShare;
+        currentTerminal["weighted_terminal_cost_contribution"] =
+            currentTerminal
+                .value(QStringLiteral("weighted_terminal_cost_contribution"))
+                .toDouble()
+            + nextCostShare;
+        currentTerminal["weighted_terminal_total_contribution"] =
+            currentTerminal
+                .value(QStringLiteral("weighted_terminal_delay_contribution"))
+                .toDouble()
+            + currentTerminal
+                .value(QStringLiteral("weighted_terminal_cost_contribution"))
+                .toDouble();
+        terminalsInPath.back() = currentTerminal;
     }
 
+    QVariantMap weightedTerminal =
+        path.costBreakdown.value(QStringLiteral("weighted_terminal")).toMap();
+    for (const QVariantMap &terminal : terminalsInPath)
+    {
+        const bool skipped =
+            terminal.value(QStringLiteral("costs_skipped")).toBool();
+        const double rawDelay =
+            terminal.value(QStringLiteral("handling_time")).toDouble();
+        const double rawCost =
+            terminal.value(QStringLiteral("cost")).toDouble();
+        if (!skipped)
+        {
+            path.rawTerminalDelayTotal += rawDelay;
+            path.rawTerminalCostTotal += rawCost;
+        }
+    }
+    weightedTerminal[QStringLiteral("delay")] =
+        path.weightedTerminalDelayTotal;
+    weightedTerminal[QStringLiteral("direct_cost")] =
+        path.weightedTerminalDirectCostTotal;
+    path.costBreakdown[QStringLiteral("weighted_terminal")] =
+        weightedTerminal;
+
     path.terminalsInPath = terminalsInPath;
-    path.totalPathCost   = path.totalEdgeCosts; // + path.totalTerminalCosts;
+    path.totalTerminalCosts = path.weightedTerminalDelayTotal
+                              + path.weightedTerminalDirectCostTotal;
+    path.totalPathCost = path.rankingCost;
 
     return path;
 }
@@ -1262,7 +1717,7 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
     // Return early for invalid input
     if (n <= 0)
     {
-        qDebug() << "Invalid request: n must be positive";
+        qCDebug(lcTerminalGraph) << "Invalid request: n must be positive";
         return QList<Path>();
     }
 
@@ -1277,8 +1732,8 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
         if (!m_terminals.contains(startCanonical)
             || !m_terminals.contains(endCanonical))
         {
-            qDebug() << "Terminal not found: start=" << startCanonical
-                     << " end=" << endCanonical;
+            qCDebug(lcTerminalGraph) << "Terminal not found: start=" << startCanonical
+                                     << " end=" << endCanonical;
             return QList<Path>();
         }
     }
@@ -1316,18 +1771,23 @@ QList<Path> TerminalGraph::findTopNShortestPaths(const QString &start,
         }
     }
 
-    // Resort and reassign path IDs
+    // Resort and assign authoritative rank/display metadata after dedupe.
     std::sort(result.begin(), result.end(), [](const Path &a, const Path &b) {
-        return a.totalPathCost < b.totalPathCost;
+        return a.rankingCost < b.rankingCost;
     });
 
     for (int i = 0; i < result.size(); i++)
     {
+        result[i].rank = i;
         result[i].pathId = i + 1;
+        result[i].requestedMode = static_cast<int>(mode);
+        result[i].requestedTopN = n;
+        result[i].skipSameModeTerminalDelaysAndCosts = skipDelays;
+        result[i].pathUid = buildPathUid(result[i]);
     }
 
-    qDebug() << "Found" << result.size() << "paths from" << startCanonical
-             << "to" << endCanonical;
+    qCDebug(lcTerminalGraph) << "Found" << result.size() << "paths from" << startCanonical
+                             << "to" << endCanonical;
     return result.toList();
 }
 

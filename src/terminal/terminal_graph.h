@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include "common.h"
 #include "terminal/terminal.h"
@@ -78,6 +79,7 @@ public:
     // Configuration
     void setCostFunctionParameters(const QVariantMap &params);
     void setLinkDefaultAttributes(const QVariantMap &attrs);
+    void resetConfigurationToDefaults();
 
     // Terminal management
     Terminal *addTerminal(const QVariantMap &terminalData);
@@ -108,6 +110,7 @@ public:
                 getAllTerminalNames(bool includeAliases = false) const;
     QVariantMap getTerminalStatus(const QString &name = QString()) const;
     void        clear();
+    int         resetRuntimeState(const QStringList &terminalIds = {});
 
     // Path finding
     QList<PathSegment>
@@ -140,8 +143,8 @@ private:
     };
     struct TerminalDetails
     {
-        double handlingTime;
-        double handlingCost;
+        double handlingTime;  ///< Seconds. Mirrors Terminal::estimateContainerHandlingTime().
+        double handlingCost;  ///< USD per container. Mirrors Terminal::estimateContainerCost().
     };
 
     QHash<EdgeIdentifier, QList<EdgeData>> m_edgeData;
@@ -165,14 +168,16 @@ private:
 
     // Convert between GraphLib edge path and TerminalSim path
     Path convertEdgePathToTerminalPath(const EdgePathInfoType &pathInfo,
-                                       int pathId, TransportationMode mode,
+                                       int displayPathId,
+                                       TransportationMode mode,
                                        bool skipDelays) const;
 
     // Update graph for specific mode
     void updateGraph(TransportationMode mode);
 
     // Build a path segment with detailed costs
-    void buildPathSegment(PathSegment &segment, bool isStart, bool isEnd,
+    void buildPathSegment(PathSegment &segment, int sequenceIndex,
+                          bool isStart, bool isEnd,
                           bool skipStartTerminal, bool skipEndTerminal,
                           const QString &from, const QString &to,
                           TransportationMode mode,

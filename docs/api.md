@@ -5,6 +5,7 @@
 - [TerminalSimulation API Documentation](#terminalsimulation-api-documentation)
   - [Table of Contents](#table-of-contents)
   - [Introduction](#introduction)
+  - [Units Reference](#units-reference)
   - [Namespace](#namespace)
   - [Core Components](#core-components)
     - [Common](#common)
@@ -55,6 +56,18 @@ The API is designed with a focus on:
 - Flexible configuration options
 - Robust error handling
 - Integration with messaging systems
+
+## Units Reference
+
+**All time-valued fields in TerminalSim are in seconds, with no exceptions.** This includes JSON configuration inputs, JSON state outputs, internal member variables, function parameters, function return values, and edge attributes carrying time quantities.
+
+**Rates** (`max_service_rate`, `service_capacity`) are in **TEU/hour**. These describe terminal throughput and are not time quantities themselves; the hourly framing is the natural operations unit.
+
+**Variance fields** follow the unit of the square of their paired mean (`customs.delay_variance` is in seconds² since `customs.delay_mean` is in seconds).
+
+**Log messages** may format a time value in hours for human readability (e.g. `"48 hours"` when the underlying code value is `172800` seconds). This is purely a formatting convention in `qDebug()` output; no code path ever manipulates a time value in hours.
+
+Before 2026-04-17, `customs.delay_mean`/`customs.delay_variance` used hours/hours², `SystemDynamicsState::delta_t` used hours, and `Terminal::estimateContainerHandlingTime()` returned hours. That mixed schema has been fully unified on seconds. See `docs/superpowers/plans/2026-04-17-time-unit-unification.md` for the design rationale.
 
 ## Namespace
 
@@ -605,8 +618,8 @@ dwellTime["parameters"] = QVariantMap{
 
 QVariantMap customs;
 customs["probability"] = 0.1;
-customs["delay_mean"] = 48.0; // 48 hours
-customs["delay_variance"] = 12.0;
+customs["delay_mean"] = 172800.0;    // 48 hours = 172800 seconds
+customs["delay_variance"] = 155520000.0; // 12 hours^2 = 155520000 seconds^2
 
 QVariantMap cost;
 cost["fixed_fees"] = 200.0;
