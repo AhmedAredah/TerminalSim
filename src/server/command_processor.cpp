@@ -7,6 +7,7 @@
 #include <QMutexLocker>
 #include <QUuid>
 #include <containerLib/containermap.h>
+#include <cmath>
 #include <optional>
 #include <stdexcept>
 
@@ -165,6 +166,116 @@ Container::HaulerType parseHauler(const QVariant &value)
         || normalized == QStringLiteral("air"))
         return Container::airTransport;
     return Container::noHauler;
+}
+
+std::optional<double> optionalDoubleParam(const QVariantMap &params,
+                                          const QStringList &keys,
+                                          const QString     &context)
+{
+    for (const QString &key : keys)
+    {
+        if (!params.contains(key))
+            continue;
+
+        bool ok = false;
+        const double parsed = params.value(key).toDouble(&ok);
+        if (!ok || !std::isfinite(parsed))
+        {
+            throw std::invalid_argument(
+                QString("Invalid numeric value for %1")
+                    .arg(context)
+                    .toStdString());
+        }
+        return parsed;
+    }
+    return std::nullopt;
+}
+
+TerminalSim::TerminalArrivalSemantics parseArrivalSemanticsText(
+    const QString &value)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized.isEmpty() || normalized == QStringLiteral("infer"))
+        return TerminalSim::TerminalArrivalSemantics::Infer;
+    if (normalized == QStringLiteral("runtime")
+        || normalized == QStringLiteral("runtime_arrival")
+        || normalized == QStringLiteral("arrival")
+        || normalized == QStringLiteral("dropoff"))
+        return TerminalSim::TerminalArrivalSemantics::RuntimeArrival;
+    if (normalized == QStringLiteral("preload")
+        || normalized == QStringLiteral("seed")
+        || normalized == QStringLiteral("initial_inventory"))
+        return TerminalSim::TerminalArrivalSemantics::Preload;
+
+    throw std::invalid_argument(
+        QString("Invalid arrival_semantics: %1")
+            .arg(value)
+            .toStdString());
+}
+
+TerminalSim::TerminalArrivalSemantics arrivalSemanticsFromParams(
+    const QVariantMap &params)
+{
+    for (const QString &key :
+         {QStringLiteral("arrival_semantics"),
+          QStringLiteral("arrivalSemantics")})
+    {
+        if (params.contains(key))
+            return parseArrivalSemanticsText(params.value(key).toString());
+    }
+
+    if (params.contains(QStringLiteral("preload")))
+    {
+        return params.value(QStringLiteral("preload")).toBool()
+            ? TerminalSim::TerminalArrivalSemantics::Preload
+            : TerminalSim::TerminalArrivalSemantics::RuntimeArrival;
+    }
+
+    return TerminalSim::TerminalArrivalSemantics::Infer;
+}
+
+double operationTimeFromParams(const QVariantMap &params)
+{
+    return optionalDoubleParam(params,
+                               {QStringLiteral("operation_time"),
+                                QStringLiteral("operationTime"),
+                                QStringLiteral("current_time"),
+                                QStringLiteral("currentTime")},
+                               QStringLiteral("operation_time"))
+        .value_or(-1.0);
+}
+
+TerminalSim::TransportationMode parseModeParam(const QVariant &value,
+                                               bool            allowAny,
+                                               const QString  &context)
+{
+    TerminalSim::TransportationMode mode;
+    if (value.typeId() == QMetaType::QString)
+    {
+        mode = TerminalSim::EnumUtils::parseTransportationMode(
+            value.toString());
+    }
+    else if (value.canConvert<int>())
+    {
+        mode = TerminalSim::EnumUtils::parseTransportationMode(
+            QString::number(value.toInt()));
+    }
+    else
+    {
+        throw std::invalid_argument(
+            QString("Invalid transportation mode for %1")
+                .arg(context)
+                .toStdString());
+    }
+
+    if (!allowAny && mode == TerminalSim::TransportationMode::Any)
+    {
+        throw std::invalid_argument(
+            QString("Concrete transportation mode required for %1")
+                .arg(context)
+                .toStdString());
+    }
+    return mode;
 }
 
 QVariantMap criteriaMapFromParams(const QVariantMap &params)
@@ -407,8 +518,8 @@ void CommandProcessor::registerCommands()
         // Extract arrival mode if provided
         TransportationMode arrivalMode = TransportationMode::Any;
         if (params.contains("arrival_mode")) {
-            arrivalMode = EnumUtils::stringToTransportationMode(
-                params.value("arrival_mode").toString());
+            arrivalMode = parseModeParam(params.value("arrival_mode"), true,
+                                         QStringLiteral("arrival_mode"));
         }
 
         QList<ContainerCore::Container> containers;
@@ -461,7 +572,10 @@ void CommandProcessor::registerCommands()
             }
         }
 
-        terminal->addContainers(containers, addingTime, arrivalMode);
+        terminal->addContainers(containers,
+                                addingTime,
+                                arrivalMode,
+                                arrivalSemanticsFromParams(params));
         return QVariant(true);
     });
 
@@ -482,8 +596,8 @@ void CommandProcessor::registerCommands()
         // Extract arrival mode if provided
         TransportationMode arrivalMode = TransportationMode::Any;
         if (params.contains("arrival_mode")) {
-            arrivalMode = EnumUtils::stringToTransportationMode(
-                params.value("arrival_mode").toString());
+            arrivalMode = parseModeParam(params.value("arrival_mode"), true,
+                                         QStringLiteral("arrival_mode"));
         }
 
         QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
@@ -492,7 +606,10 @@ void CommandProcessor::registerCommands()
             throw std::invalid_argument("Invalid JSON format for containers");
         }
 
-        terminal->addContainersFromJson(doc.object(), addingTime, arrivalMode);
+        terminal->addContainersFromJson(doc.object(),
+                                        addingTime,
+                                        arrivalMode,
+                                        arrivalSemanticsFromParams(params));
         return QVariant(true);
     });
 
@@ -572,7 +689,9 @@ void CommandProcessor::registerCommands()
 
             Terminal *terminal = getTerminalFromParams(params);
 
-            return terminal->dequeueContainersByNextDestination(destination);
+            return terminal->dequeueContainersByNextDestination(
+                destination,
+                operationTimeFromParams(params));
         });
 
     registerCommand("dequeue_containers", [this](const QVariantMap &params) {
@@ -583,7 +702,8 @@ void CommandProcessor::registerCommands()
 
         Terminal *terminal = getTerminalFromParams(params);
         return terminal->dequeueContainers(
-            containerSelectionCriteriaFromParams(params));
+            containerSelectionCriteriaFromParams(params),
+            operationTimeFromParams(params));
     });
 
     registerCommand("reserve_containers", [this](const QVariantMap &params) {
@@ -624,7 +744,9 @@ void CommandProcessor::registerCommands()
         }
 
         Terminal *terminal = getTerminalFromParams(params);
-        return terminal->commitContainerReservation(reservationId);
+        return terminal->commitContainerReservation(
+            reservationId,
+            operationTimeFromParams(params));
     });
 
     registerCommand("release_container_reservation",
@@ -699,6 +821,49 @@ void CommandProcessor::registerCommands()
 
         terminal->clear();
         return QVariant(true);
+    });
+
+    registerCommand("reset_runtime_state", [this](const QVariantMap &params) {
+        QStringList resolvedTerminalIds;
+        const QVariant terminalIdsValue =
+            params.value(QStringLiteral("terminal_ids"));
+
+        if (terminalIdsValue.canConvert<QVariantList>())
+        {
+            for (const QVariant &terminalId :
+                 terminalIdsValue.toList())
+            {
+                const QString value = terminalId.toString().trimmed();
+                if (!value.isEmpty())
+                    resolvedTerminalIds.append(value);
+            }
+        }
+        else if (params.contains(QStringLiteral("terminal_id")))
+        {
+            const QString terminalId =
+                params.value(QStringLiteral("terminal_id"))
+                    .toString()
+                    .trimmed();
+            if (!terminalId.isEmpty())
+                resolvedTerminalIds.append(terminalId);
+        }
+
+        const QStringList responseTerminalIds = resolvedTerminalIds.isEmpty()
+            ? m_graph->getAllTerminalNames(false).keys()
+            : resolvedTerminalIds;
+        const int resetCount =
+            m_graph->resetRuntimeState(resolvedTerminalIds);
+
+        QJsonObject response;
+        response[QStringLiteral("terminals_reset")] = resetCount;
+        QJsonArray terminalIds;
+        for (const QString &terminalId : responseTerminalIds)
+            terminalIds.append(terminalId);
+        response[QStringLiteral("terminal_ids")] = terminalIds;
+        response[QStringLiteral("scope")] =
+            resolvedTerminalIds.isEmpty() ? QStringLiteral("all")
+                                          : QStringLiteral("selected");
+        return response;
     });
 
     // System Dynamics commands
@@ -831,14 +996,14 @@ void CommandProcessor::registerCommands()
             params.value("execution_id").toString();
         const QVariantList terminalIds =
             params.value("terminal_ids").toList();
-        const QVariantList pathIdentityVars =
-            params.value("path_identities").toList();
+        const QVariantList canonicalPathKeyVars =
+            params.value("canonical_path_keys").toList();
 
-        QStringList pathIdentities;
-        for (const auto &pathIdentity : pathIdentityVars)
+        QStringList canonicalPathKeys;
+        for (const auto &canonicalPathKey : canonicalPathKeyVars)
         {
-            if (!pathIdentity.toString().isEmpty())
-                pathIdentities.append(pathIdentity.toString());
+            if (!canonicalPathKey.toString().isEmpty())
+                canonicalPathKeys.append(canonicalPathKey.toString());
         }
 
         QStringList resolvedTerminalIds;
@@ -870,7 +1035,7 @@ void CommandProcessor::registerCommands()
 
             const QJsonArray terminalResults =
                 terminal->getTerminalExecutionResults(
-                    executionId, pathIdentities);
+                    executionId, canonicalPathKeys);
             for (const auto &value : terminalResults)
                 results.append(value);
         }
@@ -1129,6 +1294,10 @@ QString CommandProcessor::determineEventName(const QString &command)
     {
         return "serverReset";
     }
+    else if (command == "reset_runtime_state")
+    {
+        return "runtimeStateReset";
+    }
     else if (command == "set_cost_function_parameters")
     {
         return "costFunctionUpdated";
@@ -1207,14 +1376,10 @@ QVariant CommandProcessor::handleResetServer(const QVariantMap &params)
     // Clear the existing graph
     m_graph->clear();
 
-    // Reinitialize any default settings
-    // reset default link attributes or cost function parameters
-    m_graph->setLinkDefaultAttributes({{"cost", 1.0},
-                                       {"travelTime", 1.0},
-                                       {"distance", 1.0},
-                                       {"carbonEmissions", 1.0},
-                                       {"risk", 1.0},
-                                       {"energyConsumption", 1.0}});
+    // Reinitialize graph-level prediction configuration as part of a full
+    // server reset. Runtime-only resets should use the future
+    // reset_runtime_state command instead.
+    m_graph->resetConfigurationToDefaults();
 
     qCInfo(lcCommandProcessor) << "Server reset: Terminal graph cleared "
                                   "and reinitialized to fresh state";
@@ -1333,22 +1498,9 @@ QVariant CommandProcessor::handleAddRoute(const QVariantMap &params)
     QString startTerminal = params["start_terminal"].toString();
     QString endTerminal   = params["end_terminal"].toString();
 
-    // Extract mode
-    TransportationMode mode;
-    QVariant           modeVar = params["mode"];
-
-    if (modeVar.canConvert<int>())
-    {
-        mode = static_cast<TransportationMode>(modeVar.toInt());
-    }
-    else if (modeVar.canConvert<QString>())
-    {
-        mode = EnumUtils::stringToTransportationMode(modeVar.toString());
-    }
-    else
-    {
-        throw std::invalid_argument("Invalid mode parameter");
-    }
+    const TransportationMode mode = parseModeParam(
+        params.value(QStringLiteral("mode")), false,
+        QStringLiteral("add_route.mode"));
 
     // Extract attributes (optional)
     QVariantMap attributes;
@@ -1434,16 +1586,8 @@ QVariant CommandProcessor::handleFindShortestPath(const QVariantMap &params)
     TransportationMode mode = TransportationMode::Any; // Default
     if (params.contains("mode"))
     {
-        QVariant modeVar = params["mode"];
-
-        if (modeVar.canConvert<int>())
-        {
-            mode = static_cast<TransportationMode>(modeVar.toInt());
-        }
-        else if (modeVar.canConvert<QString>())
-        {
-            mode = EnumUtils::stringToTransportationMode(modeVar.toString());
-        }
+        mode = parseModeParam(params.value(QStringLiteral("mode")), true,
+                              QStringLiteral("find_shortest_path.mode"));
     }
 
     // Find the shortest path
@@ -1478,16 +1622,8 @@ QVariant CommandProcessor::handleFindTopPaths(const QVariantMap &params)
     TransportationMode mode = TransportationMode::Truck; // Default
     if (params.contains("mode"))
     {
-        QVariant modeVar = params["mode"];
-
-        if (modeVar.canConvert<int>())
-        {
-            mode = static_cast<TransportationMode>(modeVar.toInt());
-        }
-        else if (modeVar.canConvert<QString>())
-        {
-            mode = EnumUtils::stringToTransportationMode(modeVar.toString());
-        }
+        mode = parseModeParam(params.value(QStringLiteral("mode")), true,
+                              QStringLiteral("find_top_paths.mode"));
     }
 
     // Extract skip option (optional)
@@ -1559,12 +1695,15 @@ QVariant CommandProcessor::handleAddContainer(const QVariantMap &params)
     // Extract arrival mode if provided
     TransportationMode arrivalMode = TransportationMode::Any;
     if (params.contains("arrival_mode")) {
-        arrivalMode = EnumUtils::stringToTransportationMode(
-            params.value("arrival_mode").toString());
+        arrivalMode = parseModeParam(params.value("arrival_mode"), true,
+                                     QStringLiteral("arrival_mode"));
     }
 
     // Add container to terminal with mode-specific delay
-    terminal->addContainer(container, addingTime, arrivalMode);
+    terminal->addContainer(container,
+                           addingTime,
+                           arrivalMode,
+                           arrivalSemanticsFromParams(params));
 
     return true;
 }

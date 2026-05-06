@@ -1,6 +1,7 @@
 #include <QTest>
 #include <QVariantList>
 #include <QVariantMap>
+#include <stdexcept>
 
 #include "terminal/terminal_graph.h"
 
@@ -23,6 +24,10 @@ QVariantMap makeTerminal(const QString &id, double handlingSeconds, double fixed
     interfaces[QString::number(static_cast<int>(TerminalInterface::LAND_SIDE))] =
         QVariantList{
             static_cast<int>(TransportationMode::Train)
+        };
+    interfaces[QString::number(static_cast<int>(TerminalInterface::SEA_SIDE))] =
+        QVariantList{
+            static_cast<int>(TransportationMode::Ship)
         };
     terminal[QStringLiteral("terminal_interfaces")] = interfaces;
 
@@ -267,6 +272,120 @@ private slots:
         QCOMPARE(first.size(), 1);
         QCOMPARE(second.size(), 1);
         QCOMPARE(first.first().pathUid, second.first().pathUid);
+    }
+
+    void test_path_uid_does_not_depend_on_requested_top_n()
+    {
+        TerminalGraph graph;
+        graph.addTerminal(makeTerminal(QStringLiteral("A"), 0.0, 0.0));
+        graph.addTerminal(makeTerminal(QStringLiteral("B"), 1800.0, 25.0));
+        graph.addRoute(QStringLiteral("AB"),
+                       QStringLiteral("A"),
+                       QStringLiteral("B"),
+                       TransportationMode::Train,
+                       makeRoute(QStringLiteral("AB"), QStringLiteral("A"), QStringLiteral("B"))
+                           .value(QStringLiteral("attributes")).toMap());
+
+        const QList<Path> first = graph.findTopNShortestPaths(
+            QStringLiteral("A"),
+            QStringLiteral("B"),
+            1,
+            TransportationMode::Train,
+            true);
+        const QList<Path> second = graph.findTopNShortestPaths(
+            QStringLiteral("A"),
+            QStringLiteral("B"),
+            5,
+            TransportationMode::Train,
+            true);
+
+        QCOMPARE(first.size(), 1);
+        QCOMPARE(second.size(), 1);
+        QCOMPARE(first.first().pathUid, second.first().pathUid);
+    }
+
+    void test_unknown_route_attribute_is_rejected()
+    {
+        TerminalGraph graph;
+        graph.addTerminal(makeTerminal(QStringLiteral("A"), 0.0, 0.0));
+        graph.addTerminal(makeTerminal(QStringLiteral("B"), 0.0, 0.0));
+
+        QVariantMap attrs =
+            makeRoute(QStringLiteral("AB"), QStringLiteral("A"), QStringLiteral("B"))
+                .value(QStringLiteral("attributes")).toMap();
+        attrs.insert(QStringLiteral("travellTime"), 99.0);
+
+        QVERIFY_EXCEPTION_THROWN(
+            graph.addRoute(QStringLiteral("AB"),
+                           QStringLiteral("A"),
+                           QStringLiteral("B"),
+                           TransportationMode::Train,
+                           attrs),
+            std::invalid_argument);
+    }
+
+    void test_negative_route_attribute_is_rejected()
+    {
+        TerminalGraph graph;
+        graph.addTerminal(makeTerminal(QStringLiteral("A"), 0.0, 0.0));
+        graph.addTerminal(makeTerminal(QStringLiteral("B"), 0.0, 0.0));
+
+        QVariantMap attrs =
+            makeRoute(QStringLiteral("AB"), QStringLiteral("A"), QStringLiteral("B"))
+                .value(QStringLiteral("attributes")).toMap();
+        attrs[QStringLiteral("cost")] = -1.0;
+
+        QVERIFY_EXCEPTION_THROWN(
+            graph.addRoute(QStringLiteral("AB"),
+                           QStringLiteral("A"),
+                           QStringLiteral("B"),
+                           TransportationMode::Train,
+                           attrs),
+            std::invalid_argument);
+    }
+
+    void test_add_routes_is_transactional_when_later_route_is_invalid()
+    {
+        TerminalGraph graph;
+        graph.addTerminal(makeTerminal(QStringLiteral("A"), 0.0, 0.0));
+        graph.addTerminal(makeTerminal(QStringLiteral("B"), 0.0, 0.0));
+        graph.addTerminal(makeTerminal(QStringLiteral("C"), 0.0, 0.0));
+
+        QVariantMap invalid =
+            makeRoute(QStringLiteral("BC"), QStringLiteral("B"), QStringLiteral("C"));
+        QVariantMap invalidAttrs =
+            invalid.value(QStringLiteral("attributes")).toMap();
+        invalidAttrs.insert(QStringLiteral("travellTime"), 99.0);
+        invalid[QStringLiteral("attributes")] = invalidAttrs;
+
+        QVERIFY_EXCEPTION_THROWN(
+            graph.addRoutes({makeRoute(QStringLiteral("AB"),
+                                       QStringLiteral("A"),
+                                       QStringLiteral("B")),
+                             invalid}),
+            std::invalid_argument);
+
+        const QList<Path> paths = graph.findTopNShortestPaths(
+            QStringLiteral("A"),
+            QStringLiteral("B"),
+            1,
+            TransportationMode::Train,
+            true);
+        QVERIFY(paths.isEmpty());
+    }
+
+    void test_strict_enum_parsing_rejects_invalid_values()
+    {
+        QCOMPARE(EnumUtils::stringToTransportationMode(QStringLiteral("2")),
+                 TransportationMode::Train);
+        QCOMPARE(EnumUtils::stringToTransportationMode(QStringLiteral("-1")),
+                 TransportationMode::Any);
+        QVERIFY_EXCEPTION_THROWN(
+            EnumUtils::stringToTransportationMode(QStringLiteral("Rail")),
+            std::invalid_argument);
+        QVERIFY_EXCEPTION_THROWN(
+            EnumUtils::stringToTerminalInterface(QStringLiteral("RAIL_SIDE")),
+            std::invalid_argument);
     }
 };
 

@@ -14,6 +14,7 @@
 #include <QThread>
 #include <QUrl>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -40,22 +41,359 @@ QString canonicalSegmentSignature(const QList<PathSegment> &segments)
     return signature;
 }
 
+QStringList routeAttributeKeys()
+{
+    return {QStringLiteral("cost"),
+            QStringLiteral("travelTime"),
+            QStringLiteral("distance"),
+            QStringLiteral("carbonEmissions"),
+            QStringLiteral("risk"),
+            QStringLiteral("energyConsumption")};
+}
+
+QStringList costAttributeKeys()
+{
+    QStringList keys = routeAttributeKeys();
+    keys << QStringLiteral("terminal_delay")
+         << QStringLiteral("terminal_cost");
+    return keys;
+}
+
+QVariantMap defaultLinkAttributes()
+{
+    return {{QStringLiteral("cost"), 1.0},
+            {QStringLiteral("travelTime"), 1.0},
+            {QStringLiteral("distance"), 1.0},
+            {QStringLiteral("carbonEmissions"), 1.0},
+            {QStringLiteral("risk"), 1.0},
+            {QStringLiteral("energyConsumption"), 1.0}};
+}
+
+QVariantMap defaultCostFunctionParameters()
+{
+    const QVariantMap weights{
+        {QStringLiteral("cost"), 1.0},
+        {QStringLiteral("travelTime"), 1.0},
+        {QStringLiteral("distance"), 1.0},
+        {QStringLiteral("carbonEmissions"), 1.0},
+        {QStringLiteral("risk"), 1.0},
+        {QStringLiteral("energyConsumption"), 1.0},
+        {QStringLiteral("terminal_delay"), 1.0},
+        {QStringLiteral("terminal_cost"), 1.0}};
+
+    return {{QStringLiteral("default"), weights},
+            {QString::number(static_cast<int>(TransportationMode::Ship)), weights},
+            {QString::number(static_cast<int>(TransportationMode::Train)), weights},
+            {QString::number(static_cast<int>(TransportationMode::Truck)), weights}};
+}
+
+double numericAttributeValue(const QVariant &value, const QString &context)
+{
+    bool ok = false;
+    const double parsed = value.toDouble(&ok);
+    if (!ok || !std::isfinite(parsed))
+    {
+        throw std::invalid_argument(
+            QString("Invalid numeric value for %1").arg(context).toStdString());
+    }
+    return parsed;
+}
+
+void validateNonNegative(double value, const QString &context)
+{
+    if (value < 0.0)
+    {
+        throw std::invalid_argument(
+            QString("Negative value is not allowed for %1")
+                .arg(context)
+                .toStdString());
+    }
+}
+
+QVariantMap validatedAttributeMap(const QVariantMap &attrs,
+                                  const QStringList &allowedKeys,
+                                  const QStringList &requiredKeys,
+                                  const QString     &context)
+{
+    const QSet<QString> allowed(allowedKeys.cbegin(), allowedKeys.cend());
+    QVariantMap validated;
+
+    for (auto it = attrs.constBegin(); it != attrs.constEnd(); ++it)
+    {
+        if (!allowed.contains(it.key()))
+        {
+            throw std::invalid_argument(
+                QString("Unknown numeric attribute '%1' in %2")
+                    .arg(it.key(), context)
+                    .toStdString());
+        }
+
+        const double value =
+            numericAttributeValue(it.value(), context + "." + it.key());
+        validateNonNegative(value, context + "." + it.key());
+        validated.insert(it.key(), value);
+    }
+
+    for (const QString &key : requiredKeys)
+    {
+        if (!validated.contains(key))
+        {
+            throw std::invalid_argument(
+                QString("Missing required attribute '%1' in %2")
+                    .arg(key, context)
+                    .toStdString());
+        }
+    }
+
+    return validated;
+}
+
+QVariantMap validatedRouteAttributes(const QVariantMap &attrs,
+                                     const QVariantMap &defaults,
+                                     const QString     &context)
+{
+    QVariantMap merged = validatedAttributeMap(
+        defaults, routeAttributeKeys(), routeAttributeKeys(),
+        context + QStringLiteral(".defaults"));
+
+    const QVariantMap overrides = validatedAttributeMap(
+        attrs, routeAttributeKeys(), {}, context);
+    for (auto it = overrides.constBegin(); it != overrides.constEnd(); ++it)
+        merged[it.key()] = it.value();
+
+    return merged;
+}
+
+void validateCostFunctionParameters(const QVariantMap &params)
+{
+    const QStringList requiredModes = {
+        QStringLiteral("default"),
+        QString::number(static_cast<int>(TransportationMode::Ship)),
+        QString::number(static_cast<int>(TransportationMode::Train)),
+        QString::number(static_cast<int>(TransportationMode::Truck))};
+
+    for (auto it = params.constBegin(); it != params.constEnd(); ++it)
+    {
+        if (!requiredModes.contains(it.key()))
+        {
+            throw std::invalid_argument(
+                QString("Unknown cost-function mode key: %1")
+                    .arg(it.key())
+                    .toStdString());
+        }
+    }
+
+    for (const QString &mode : requiredModes)
+    {
+        if (!params.contains(mode) || !params.value(mode).canConvert<QVariantMap>())
+        {
+            throw std::invalid_argument(
+                QString("Missing cost-function parameters for mode: %1")
+                    .arg(mode)
+                    .toStdString());
+        }
+
+        validatedAttributeMap(params.value(mode).toMap(),
+                              costAttributeKeys(),
+                              costAttributeKeys(),
+                              QStringLiteral("cost_function[%1]").arg(mode));
+    }
+}
+
+bool isConcreteMode(TransportationMode mode)
+{
+    return mode == TransportationMode::Ship
+        || mode == TransportationMode::Truck
+        || mode == TransportationMode::Train;
+}
+
+TransportationMode parseModeVariant(const QVariant &value,
+                                    const QString  &context,
+                                    bool            allowAny)
+{
+    TransportationMode mode;
+    if (value.typeId() == QMetaType::QString)
+    {
+        mode = EnumUtils::parseTransportationMode(value.toString());
+    }
+    else if (value.canConvert<int>())
+    {
+        mode = EnumUtils::parseTransportationMode(
+            QString::number(value.toInt()));
+    }
+    else
+    {
+        throw std::invalid_argument(
+            QString("Invalid transportation mode for %1")
+                .arg(context)
+                .toStdString());
+    }
+
+    if (!allowAny && !isConcreteMode(mode))
+    {
+        throw std::invalid_argument(
+            QString("Concrete transportation mode required for %1")
+                .arg(context)
+                .toStdString());
+    }
+    return mode;
+}
+
+TerminalInterface parseInterfaceKey(const QString &key,
+                                    const QString &context)
+{
+    try
+    {
+        return EnumUtils::parseTerminalInterface(key);
+    }
+    catch (const std::invalid_argument &)
+    {
+        throw std::invalid_argument(
+            QString("Invalid terminal interface '%1' in %2")
+                .arg(key, context)
+                .toStdString());
+    }
+}
+
+bool interfaceSupportsMode(TerminalInterface interface,
+                           TransportationMode mode)
+{
+    switch (mode)
+    {
+        case TransportationMode::Truck:
+        case TransportationMode::Train:
+            return interface == TerminalInterface::LAND_SIDE;
+        case TransportationMode::Ship:
+            return interface == TerminalInterface::SEA_SIDE;
+        case TransportationMode::Any:
+            return false;
+    }
+    return false;
+}
+
+QMap<TerminalInterface, QSet<TransportationMode>>
+parseTerminalInterfaces(const QVariantMap &interfacesMap,
+                        const QString     &context)
+{
+    if (interfacesMap.isEmpty())
+    {
+        throw std::invalid_argument(
+            QString("At least one terminal interface must be provided for %1")
+                .arg(context)
+                .toStdString());
+    }
+
+    QMap<TerminalInterface, QSet<TransportationMode>> interfaces;
+    for (auto it = interfacesMap.constBegin(); it != interfacesMap.constEnd();
+         ++it)
+    {
+        const TerminalInterface interface =
+            parseInterfaceKey(it.key(), context);
+        const QVariantList modesList = it.value().toList();
+        if (modesList.isEmpty())
+        {
+            throw std::invalid_argument(
+                QString("Interface %1 has no modes in %2")
+                    .arg(it.key(), context)
+                    .toStdString());
+        }
+
+        QSet<TransportationMode> modes;
+        for (const QVariant &modeVar : modesList)
+        {
+            const TransportationMode mode =
+                parseModeVariant(modeVar, context, false);
+            if (!interfaceSupportsMode(interface, mode))
+            {
+                throw std::invalid_argument(
+                    QString("Mode %1 is not compatible with interface %2 in %3")
+                        .arg(EnumUtils::transportationModeToString(mode),
+                             EnumUtils::terminalInterfaceToString(interface),
+                             context)
+                        .toStdString());
+            }
+            modes.insert(mode);
+        }
+
+        interfaces[interface] = modes;
+    }
+
+    return interfaces;
+}
+
+QStringList parseTerminalNames(const QVariant &namesVar,
+                               const QString  &context)
+{
+    QStringList names;
+    if (namesVar.typeId() == QMetaType::QString)
+    {
+        names << namesVar.toString();
+    }
+    else if (namesVar.canConvert<QStringList>())
+    {
+        names = namesVar.toStringList();
+    }
+    else if (namesVar.canConvert<QVariantList>())
+    {
+        for (const QVariant &nameVar : namesVar.toList())
+        {
+            const QString name = nameVar.toString().trimmed();
+            if (!name.isEmpty())
+                names << name;
+        }
+    }
+    else
+    {
+        throw std::invalid_argument(
+            QString("terminal_names must be a string or list in %1")
+                .arg(context)
+                .toStdString());
+    }
+
+    names.removeDuplicates();
+    if (names.isEmpty())
+    {
+        throw std::invalid_argument(
+            QString("At least one terminal name must be provided in %1")
+                .arg(context)
+                .toStdString());
+    }
+    return names;
+}
+
+bool terminalSupportsMode(const Terminal *terminal, TransportationMode mode)
+{
+    if (!terminal || !isConcreteMode(mode))
+        return false;
+
+    const auto interfaces = terminal->getInterfaces();
+    for (auto it = interfaces.constBegin(); it != interfaces.constEnd(); ++it)
+    {
+        if (it.value().contains(mode) && interfaceSupportsMode(it.key(), mode))
+            return true;
+    }
+    return false;
+}
+
 QString buildPathUid(const Path &path)
 {
+    const QString policySignature =
+        path.skipSameModeTerminalDelaysAndCosts
+            ? QStringLiteral("legacy-same-mode-skip:on")
+            : QStringLiteral("legacy-same-mode-skip:off");
     const QByteArray signatureHash =
         QCryptographicHash::hash(
-            canonicalSegmentSignature(path.segments).toUtf8(),
+            (canonicalSegmentSignature(path.segments)
+             + QStringLiteral("|policy=") + policySignature).toUtf8(),
             QCryptographicHash::Sha256)
             .toHex();
 
     return QStringLiteral(
-               "pf|v1|start=%1|end=%2|mode=%3|skip=%4|rank=%5|sig=%6")
+               "pf|v2|start=%1|end=%2|mode=%3|policy=%4|sig=%5")
         .arg(percentEncode(path.startTerminal),
              percentEncode(path.endTerminal),
              QString::number(path.requestedMode),
-             path.skipSameModeTerminalDelaysAndCosts ? QStringLiteral("1")
-                                                     : QStringLiteral("0"),
-             QString::number(path.rank),
+             percentEncode(policySignature),
              QString::fromLatin1(signatureHash));
 }
 
@@ -70,48 +408,8 @@ TerminalGraph::TerminalGraph(const QString &dir)
     : QObject(nullptr)
     , m_pathToTerminalsDirectory(dir)
 {
-    // Initialize default cost function parameters
-    m_costFunctionParametersWeights = {
-        {"default", QVariantMap{{"cost", 1.0},
-                                {"travelTime", 1.0},
-                                {"distance", 1.0},
-                                {"carbonEmissions", 1.0},
-                                {"risk", 1.0},
-                                {"energyConsumption", 1.0},
-                                {"terminal_delay", 1.0},
-                                {"terminal_cost", 1.0}}},
-        {QString::number(static_cast<int>(TransportationMode::Ship)),
-         QVariantMap{{"cost", 1.0},
-                     {"travelTime", 1.0},
-                     {"distance", 1.0},
-                     {"carbonEmissions", 1.0},
-                     {"risk", 1.0},
-                     {"energyConsumption", 1.0},
-                     {"terminal_delay", 1.0},
-                     {"terminal_cost", 1.0}}},
-        {QString::number(static_cast<int>(TransportationMode::Train)),
-         QVariantMap{{"cost", 1.0},
-                     {"travelTime", 1.0},
-                     {"distance", 1.0},
-                     {"carbonEmissions", 1.0},
-                     {"risk", 1.0},
-                     {"energyConsumption", 1.0},
-                     {"terminal_delay", 1.0},
-                     {"terminal_cost", 1.0}}},
-        {QString::number(static_cast<int>(TransportationMode::Truck)),
-         QVariantMap{{"cost", 1.0},
-                     {"travelTime", 1.0},
-                     {"distance", 1.0},
-                     {"carbonEmissions", 1.0},
-                     {"risk", 1.0},
-                     {"energyConsumption", 1.0},
-                     {"terminal_delay", 1.0},
-                     {"terminal_cost", 1.0}}}};
-
-    // Set default link attributes
-    m_defaultLinkAttributes = {{"cost", 1.0},     {"travelTime", 1.0},
-                               {"distance", 1.0}, {"carbonEmissions", 1.0},
-                               {"risk", 1.0},     {"energyConsumption", 1.0}};
+    m_costFunctionParametersWeights = defaultCostFunctionParameters();
+    m_defaultLinkAttributes = defaultLinkAttributes();
 
     qCInfo(lcTerminalGraph) << "Graph initialized with dir:" << (dir.isEmpty() ? "None" : dir);
 }
@@ -141,84 +439,41 @@ TerminalGraph::~TerminalGraph()
 
 void TerminalGraph::setCostFunctionParameters(const QVariantMap &params)
 {
+    validateCostFunctionParameters(params);
     QMutexLocker locker(&m_mutex);
     m_costFunctionParametersWeights = params;
 }
 
 void TerminalGraph::setLinkDefaultAttributes(const QVariantMap &attrs)
 {
+    const QVariantMap validated = validatedAttributeMap(
+        attrs, routeAttributeKeys(), routeAttributeKeys(),
+        QStringLiteral("default_link_attributes"));
     QMutexLocker locker(&m_mutex);   // Ensure thread safety
-    m_defaultLinkAttributes = attrs; // Update attributes
+    m_defaultLinkAttributes = validated; // Update attributes
+}
+
+void TerminalGraph::resetConfigurationToDefaults()
+{
+    QMutexLocker locker(&m_mutex);
+    m_costFunctionParametersWeights = defaultCostFunctionParameters();
+    m_defaultLinkAttributes = defaultLinkAttributes();
 }
 
 Terminal *TerminalGraph::addTerminalInternal(const QVariantMap &terminalData)
 {
-    // Extract terminal names (assuming validation has been done)
-    QStringList terminalNames;
-    QVariant    namesVar = terminalData["terminal_names"];
-    if (namesVar.canConvert<QString>())
-    {
-        terminalNames << namesVar.toString();
-    }
-    else
-    {
-        terminalNames = namesVar.toStringList();
-    }
+    const QStringList terminalNames = parseTerminalNames(
+        terminalData.value(QStringLiteral("terminal_names")),
+        QStringLiteral("terminal"));
 
     QString     canonical    = terminalNames.first();
     QString     displayName  = terminalData["display_name"].toString();
     QVariantMap customConfig = terminalData["custom_config"].toMap();
     QString     region = terminalData.value("region", QString()).toString();
 
-    // Parse interfaces
-    QVariantMap interfacesMap = terminalData["terminal_interfaces"].toMap();
-    QMap<TerminalInterface, QSet<TransportationMode>> interfaces;
-
-    for (auto it = interfacesMap.constBegin(); it != interfacesMap.constEnd();
-         ++it)
-    {
-        TerminalInterface interface;
-        bool              ok = false;
-
-        int interfaceInt = it.key().toInt(&ok);
-        if (ok)
-        {
-            interface = static_cast<TerminalInterface>(interfaceInt);
-        }
-        else
-        {
-            interface = EnumUtils::stringToTerminalInterface(it.key());
-        }
-
-        QSet<TransportationMode> modes;
-        QVariantList             modesList = it.value().toList();
-
-        for (const QVariant &modeVar : modesList)
-        {
-            TransportationMode mode;
-
-            if (modeVar.canConvert<int>())
-            {
-                mode = static_cast<TransportationMode>(modeVar.toInt());
-            }
-            else if (modeVar.canConvert<QString>())
-            {
-                mode =
-                    EnumUtils::stringToTransportationMode(modeVar.toString());
-            }
-            else
-            {
-                continue;
-            }
-
-            modes.insert(mode);
-        }
-
-        if (!modes.isEmpty())
-        {
-            interfaces[interface] = modes;
-        }
-    }
+    const auto interfaces = parseTerminalInterfaces(
+        terminalData.value(QStringLiteral("terminal_interfaces")).toMap(),
+        canonical);
 
     // Parse mode network aliases from custom config
     auto modeNetworkAliases = Terminal::parseModeNetworkAliases(
@@ -279,28 +534,9 @@ Terminal *TerminalGraph::addTerminal(const QVariantMap &terminalData)
         throw std::invalid_argument("Missing required fields for terminal");
     }
 
-    // Extract terminal names for validation
-    QStringList terminalNames;
-    QVariant    namesVar = terminalData["terminal_names"];
-    if (namesVar.canConvert<QString>())
-    {
-        terminalNames << namesVar.toString();
-    }
-    else if (namesVar.canConvert<QStringList>())
-    {
-        terminalNames = namesVar.toStringList();
-    }
-    else
-    {
-        throw std::invalid_argument(
-            "terminal_names must be a string or list of strings");
-    }
-
-    if (terminalNames.isEmpty())
-    {
-        throw std::invalid_argument(
-            "At least one terminal name must be provided");
-    }
+    const QStringList terminalNames = parseTerminalNames(
+        terminalData.value(QStringLiteral("terminal_names")),
+        QStringLiteral("terminal"));
 
     QString canonical = terminalNames.first();
 
@@ -322,13 +558,9 @@ Terminal *TerminalGraph::addTerminal(const QVariantMap &terminalData)
         }
     }
 
-    // Validate terminal interfaces
-    QVariantMap interfacesMap = terminalData["terminal_interfaces"].toMap();
-    if (interfacesMap.isEmpty())
-    {
-        throw std::invalid_argument(
-            "At least one terminal interface must be provided");
-    }
+    parseTerminalInterfaces(
+        terminalData.value(QStringLiteral("terminal_interfaces")).toMap(),
+        canonical);
 
     return addTerminalInternal(terminalData);
 }
@@ -352,28 +584,9 @@ TerminalGraph::addTerminals(const QList<QVariantMap> &terminalsList)
             throw std::invalid_argument("Missing required fields for terminal");
         }
 
-        // Extract terminal names for validation
-        QStringList terminalNames;
-        QVariant    namesVar = terminalData["terminal_names"];
-        if (namesVar.canConvert<QString>())
-        {
-            terminalNames << namesVar.toString();
-        }
-        else if (namesVar.canConvert<QStringList>())
-        {
-            terminalNames = namesVar.toStringList();
-        }
-        else
-        {
-            throw std::invalid_argument(
-                "terminal_names must be a string or list of strings");
-        }
-
-        if (terminalNames.isEmpty())
-        {
-            throw std::invalid_argument(
-                "At least one terminal name must be provided");
-        }
+        const QStringList terminalNames = parseTerminalNames(
+            terminalData.value(QStringLiteral("terminal_names")),
+            QStringLiteral("terminal"));
 
         QString canonical = terminalNames.first();
 
@@ -388,6 +601,11 @@ TerminalGraph::addTerminals(const QList<QVariantMap> &terminalsList)
         // in the list
         for (const QString &name : terminalNames)
         {
+            if (m_terminalAliases.contains(name))
+            {
+                throw std::invalid_argument("Duplicate terminal name: "
+                                            + name.toStdString());
+            }
             if (allNames.contains(name))
             {
                 throw std::invalid_argument("Duplicate terminal name: "
@@ -396,13 +614,9 @@ TerminalGraph::addTerminals(const QList<QVariantMap> &terminalsList)
             allNames.insert(name);
         }
 
-        // Validate terminal interfaces
-        QVariantMap interfacesMap = terminalData["terminal_interfaces"].toMap();
-        if (interfacesMap.isEmpty())
-        {
-            throw std::invalid_argument(
-                "At least one terminal interface must be provided");
-        }
+        parseTerminalInterfaces(
+            terminalData.value(QStringLiteral("terminal_interfaces")).toMap(),
+            canonical);
     }
 
     // Add all terminals after validation
@@ -444,6 +658,14 @@ TerminalGraph::addRouteInternal(const QString &id, const QString &start,
                                 const QString &end, TransportationMode mode,
                                 const QVariantMap &attrs)
 {
+    if (!isConcreteMode(mode))
+    {
+        throw std::invalid_argument(
+            QString("Route %1 requires a concrete transportation mode")
+                .arg(id)
+                .toStdString());
+    }
+
     QString startCanonical = m_terminalAliases.value(start, start);
     QString endCanonical   = m_terminalAliases.value(end, end);
 
@@ -453,12 +675,19 @@ TerminalGraph::addRouteInternal(const QString &id, const QString &start,
         throw std::invalid_argument("Terminal not found");
     }
 
-    // Merge default and provided attributes
-    QVariantMap routeAttrs = m_defaultLinkAttributes;
-    for (auto it = attrs.begin(); it != attrs.end(); ++it)
+    if (!terminalSupportsMode(m_terminals.value(startCanonical), mode)
+        || !terminalSupportsMode(m_terminals.value(endCanonical), mode))
     {
-        routeAttrs[it.key()] = it.value();
+        throw std::invalid_argument(
+            QString("Route %1 uses mode %2 but one or both endpoint terminals "
+                    "do not support that mode/interface")
+                .arg(id, EnumUtils::transportationModeToString(mode))
+                .toStdString());
     }
+
+    const QVariantMap routeAttrs = validatedRouteAttributes(
+        attrs, m_defaultLinkAttributes,
+        QStringLiteral("route '%1'").arg(id));
 
     // Create edge data with the same ID for both directions
     EdgeData edgeData = {id, mode, routeAttrs};
@@ -551,6 +780,15 @@ TerminalGraph::addRoutes(const QList<QVariantMap> &routesList)
 {
     QMutexLocker                   locker(&m_mutex);
     QList<QPair<QString, QString>> addedRoutes;
+    struct ValidatedRoute
+    {
+        QString            id;
+        QString            start;
+        QString            end;
+        TransportationMode mode;
+        QVariantMap        attrs;
+    };
+    QList<ValidatedRoute> validatedRoutes;
 
     // First validate all routes
     for (const QVariantMap &routeData : routesList)
@@ -568,6 +806,12 @@ TerminalGraph::addRoutes(const QList<QVariantMap> &routesList)
         QString start = routeData["start_terminal"].toString();
         QString end   = routeData["end_terminal"].toString();
         QString id    = routeData["route_id"].toString();
+        if (id.trimmed().isEmpty() || start.trimmed().isEmpty()
+            || end.trimmed().isEmpty())
+        {
+            throw std::invalid_argument(
+                "Route id, start terminal, and end terminal must be provided");
+        }
 
         QString startCanonical = getCanonicalName(start);
         QString endCanonical   = getCanonicalName(end);
@@ -578,31 +822,21 @@ TerminalGraph::addRoutes(const QList<QVariantMap> &routesList)
             throw std::invalid_argument("Terminal not found for route ID: "
                                         + id.toStdString());
         }
-    }
-
-    // Add all routes
-    for (const QVariantMap &routeData : routesList)
-    {
-        QString id    = routeData["route_id"].toString();
-        QString start = routeData["start_terminal"].toString();
-        QString end   = routeData["end_terminal"].toString();
 
         // Parse mode
-        TransportationMode mode;
-        QVariant           modeVar = routeData["mode"];
+        const TransportationMode mode = parseModeVariant(
+            routeData.value(QStringLiteral("mode")),
+            QStringLiteral("route '%1'").arg(id),
+            false);
 
-        if (modeVar.canConvert<int>())
+        if (!terminalSupportsMode(m_terminals.value(startCanonical), mode)
+            || !terminalSupportsMode(m_terminals.value(endCanonical), mode))
         {
-            mode = static_cast<TransportationMode>(modeVar.toInt());
-        }
-        else if (modeVar.canConvert<QString>())
-        {
-            mode = EnumUtils::stringToTransportationMode(modeVar.toString());
-        }
-        else
-        {
-            throw std::invalid_argument("Invalid mode parameter for route ID: "
-                                        + id.toStdString());
+            throw std::invalid_argument(
+                QString("Route %1 uses mode %2 but one or both endpoint "
+                        "terminals do not support that mode/interface")
+                    .arg(id, EnumUtils::transportationModeToString(mode))
+                    .toStdString());
         }
 
         // Get attributes
@@ -612,10 +846,22 @@ TerminalGraph::addRoutes(const QList<QVariantMap> &routesList)
         {
             attrs = routeData["attributes"].toMap();
         }
+        const QVariantMap validatedAttrs = validatedRouteAttributes(
+            attrs, m_defaultLinkAttributes,
+            QStringLiteral("route '%1'").arg(id));
 
+        validatedRoutes.append(
+            ValidatedRoute{id, start, end, mode, validatedAttrs});
+    }
+
+    // Add all routes after complete validation so a bad batch leaves topology
+    // unchanged.
+    for (const ValidatedRoute &routeData : validatedRoutes)
+    {
         // Add the route
         QPair<QString, QString> route =
-            addRouteInternal(id, start, end, mode, attrs);
+            addRouteInternal(routeData.id, routeData.start, routeData.end,
+                             routeData.mode, routeData.attrs);
         addedRoutes.append(route);
     }
 
@@ -681,16 +927,14 @@ bool TerminalGraph::removeTerminal(const QString &name)
             m_edgeData.remove(edge);
         }
 
-        // Terminal from graph
-        // Note: If the vertex doesn't exist, addVertex simply returns false
-        // but doesn't throw an exception.
-        m_graph.addVertex(canonical);
+        m_graph.removeVertex(canonical);
 
         // Remove terminal from map (but don't delete yet)
         m_terminals.remove(canonical);
 
         // Remove node attributes
         m_nodeAttributes.remove(canonical);
+        m_terminalData.remove(canonical);
 
         success = true;
     }
@@ -752,6 +996,7 @@ void TerminalGraph::clear()
         m_canonicalToAliases.clear();
         m_nodeAttributes.clear();
         m_edgeData.clear();
+        m_terminalData.clear();
 
         // Clear the graph
         m_graph = GraphType();
@@ -764,6 +1009,60 @@ void TerminalGraph::clear()
     }
 
     qCDebug(lcTerminalGraph) << "Graph cleared";
+}
+
+int TerminalGraph::resetRuntimeState(const QStringList &terminalIds)
+{
+    QList<Terminal *> terminalsToReset;
+    QStringList       resolvedTerminalIds;
+
+    {
+        QMutexLocker locker(&m_mutex);
+
+        if (terminalIds.isEmpty())
+        {
+            for (auto it = m_terminals.constBegin();
+                 it != m_terminals.constEnd(); ++it)
+            {
+                terminalsToReset.append(it.value());
+                resolvedTerminalIds.append(it.key());
+            }
+        }
+        else
+        {
+            QSet<QString> seen;
+            for (const QString &terminalId : terminalIds)
+            {
+                const QString canonical =
+                    getCanonicalName(terminalId.trimmed());
+                if (canonical.isEmpty())
+                    continue;
+                if (!m_terminals.contains(canonical))
+                {
+                    throw std::invalid_argument(
+                        QString("Terminal not found: %1")
+                            .arg(terminalId)
+                            .toStdString());
+                }
+                if (seen.contains(canonical))
+                    continue;
+
+                seen.insert(canonical);
+                terminalsToReset.append(m_terminals.value(canonical));
+                resolvedTerminalIds.append(canonical);
+            }
+        }
+    }
+
+    for (Terminal *terminal : terminalsToReset)
+    {
+        if (terminal)
+            terminal->resetRuntimeState();
+    }
+
+    qCInfo(lcTerminalGraph) << "Runtime state reset for terminals:"
+                            << resolvedTerminalIds;
+    return terminalsToReset.size();
 }
 
 QVariantMap TerminalGraph::getTerminalStatus(const QString &name) const
@@ -863,12 +1162,31 @@ double TerminalGraph::computeCost(const QVariantMap &params,
 
     for (auto it = params.begin(); it != params.end(); ++it)
     {
-        bool   ok;
-        double value = it.value().toDouble(&ok);
-        if (!ok)
-            continue;
+        if (!costAttributeKeys().contains(it.key()))
+        {
+            throw std::invalid_argument(
+                QString("Unknown cost attribute in cost computation: %1")
+                    .arg(it.key())
+                    .toStdString());
+        }
 
-        double weight     = modeWeights.value(it.key(), 1.0).toDouble();
+        if (!modeWeights.contains(it.key()))
+        {
+            throw std::invalid_argument(
+                QString("Missing cost-function weight for attribute: %1")
+                    .arg(it.key())
+                    .toStdString());
+        }
+
+        const double value = numericAttributeValue(
+            it.value(), QStringLiteral("cost.%1").arg(it.key()));
+        validateNonNegative(value,
+                            QStringLiteral("cost.%1").arg(it.key()));
+        const double weight = numericAttributeValue(
+            modeWeights.value(it.key()),
+            QStringLiteral("weight.%1").arg(it.key()));
+        validateNonNegative(weight,
+                            QStringLiteral("weight.%1").arg(it.key()));
         double factorCost = weight * value;
         cost += factorCost;
     }

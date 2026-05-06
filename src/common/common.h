@@ -3,6 +3,7 @@
 #include <QString>
 #include <QMetaEnum>
 #include <QObject>
+#include <optional>
 
 namespace TerminalSim {
 
@@ -26,12 +27,12 @@ Q_ENUM_NS(TransportationMode)
  */
 enum class TerminalInterface
 {
-    LAND_SIDE, /**< Interface for land-based
+    LAND_SIDE = 0, /**< Interface for land-based
        transportation (e.g., trucks, trains)
      */
-    SEA_SIDE,  /**< Interface for maritime transportation
+    SEA_SIDE = 1,  /**< Interface for maritime transportation
         (e.g., ships, barges) */
-    AIR_SIDE   /**< Interface for air transportation
+    AIR_SIDE = 2   /**< Interface for air transportation
                  (e.g., cargo planes) */
 };
 Q_ENUM_NS(TerminalInterface)
@@ -42,9 +43,15 @@ Q_ENUM_NS(TerminalInterface)
 class EnumUtils {
 public:
     static QString transportationModeToString(TransportationMode mode);
+    static std::optional<TransportationMode>
+    tryParseTransportationMode(const QString& str);
+    static TransportationMode parseTransportationMode(const QString& str);
     static TransportationMode stringToTransportationMode(const QString& str);
 
     static QString terminalInterfaceToString(TerminalInterface interface);
+    static std::optional<TerminalInterface>
+    tryParseTerminalInterface(const QString& str);
+    static TerminalInterface parseTerminalInterface(const QString& str);
     static TerminalInterface stringToTerminalInterface(const QString& str);
 };
 

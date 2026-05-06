@@ -76,6 +76,8 @@ struct SystemDynamicsState
     double utilization       = 0.0; ///< U_k: current utilization (I_k / Cap_k)
     double congestion        = 0.0; ///< G_k: congestion level [0, 1]
     double serviceCapacity   = 0.0; ///< S_k^cap: congestion-limited service rate (TEU/hour)
+    int    serviceCapacityThisStep = 0; ///< Integer TEU budget available in the current SD step.
+    double serviceCapacityCarryoverTeu = 0.0; ///< Fractional TEU budget carried across SD steps.
     double delayMultiplier   = 1.0; ///< M_k: dwell time multiplier
     int    arrivalsThisStep  = 0;   ///< N_k^arr: arrivals in current time step
     int    departuresThisStep = 0;  ///< N_k^srv: departures in current time step
@@ -83,10 +85,17 @@ struct SystemDynamicsState
     double deltaT            = 3600.0; ///< Current time step duration (seconds). Default 3600.0 = 1 hour.
 };
 
+enum class TerminalArrivalSemantics
+{
+    Infer,
+    RuntimeArrival,
+    Preload
+};
+
 struct TerminalHandlingBatchRecord
 {
     QString            executionId;
-    QString            pathIdentity;
+    QString            canonicalPathKey;
     QString            scenarioTerminalId;
     QString            runtimeTerminalId;
     int                terminalSequenceIndex = -1;
@@ -112,7 +121,7 @@ struct TerminalHandlingBatchRecord
 struct TerminalExecutionResult
 {
     QString     executionId;
-    QString     pathIdentity;
+    QString     canonicalPathKey;
     QString     scenarioTerminalId;
     QString     runtimeTerminalId;
     int         terminalSequenceIndex = -1;
@@ -204,13 +213,19 @@ public:
     // Container operations
     void addContainer(const ContainerCore::Container &container,
                       double                          addingTime = -1,
-                      TransportationMode              arrivalMode = TransportationMode::Any);
+                      TransportationMode              arrivalMode = TransportationMode::Any,
+                      TerminalArrivalSemantics        arrivalSemantics =
+                          TerminalArrivalSemantics::Infer);
     void addContainers(const QList<ContainerCore::Container> &containers,
                        double                                 addingTime = -1,
-                       TransportationMode arrivalMode = TransportationMode::Any);
+                       TransportationMode arrivalMode = TransportationMode::Any,
+                       TerminalArrivalSemantics arrivalSemantics =
+                           TerminalArrivalSemantics::Infer);
     void addContainersFromJson(const QJsonObject &containers,
                                double             addingTime = -1,
-                               TransportationMode arrivalMode = TransportationMode::Any);
+                               TransportationMode arrivalMode = TransportationMode::Any,
+                               TerminalArrivalSemantics arrivalSemantics =
+                                   TerminalArrivalSemantics::Infer);
 
     // Container queries
     QJsonArray
@@ -221,14 +236,17 @@ public:
     QJsonArray getContainersByNextDestination(const QString &destination) const;
     QJsonArray
     getContainers(const ContainerCore::ContainerSelectionCriteria &criteria) const;
-    QJsonArray dequeueContainersByNextDestination(const QString &destination);
+    QJsonArray dequeueContainersByNextDestination(const QString &destination,
+                                                  double operationTime = -1.0);
     QJsonArray
-    dequeueContainers(const ContainerCore::ContainerSelectionCriteria &criteria);
+    dequeueContainers(const ContainerCore::ContainerSelectionCriteria &criteria,
+                      double operationTime = -1.0);
     QJsonObject reserveContainers(
         const QString                                      &reservationId,
         const ContainerCore::ContainerSelectionCriteria    &criteria);
     QJsonObject commitContainerReservation(
-        const QString &reservationId);
+        const QString &reservationId,
+        double operationTime = -1.0);
     QJsonObject releaseContainerReservation(
         const QString &reservationId);
 
@@ -237,6 +255,7 @@ public:
     int  getAvailableCapacity() const;
     int  getMaxCapacity() const;
     void clear();
+    void resetRuntimeState();
 
     // Getters
     const QString &getTerminalName() const
@@ -280,7 +299,7 @@ public:
     QJsonObject getRuntimeTerminalProjectionsByMode() const;
     QJsonArray  getTerminalExecutionResults(
          const QString     &executionId = QString(),
-         const QStringList &pathIdentities = {}) const;
+         const QStringList &canonicalPathKeys = {}) const;
     int clearTerminalExecutionResults(
         const QString &executionId = QString());
 
@@ -317,8 +336,8 @@ public:
 
     /**
      * @brief Get remaining service capacity for current time step
-     * @return Remaining capacity in TEU (capacityThisStep - departuresThisStep).
-     *         See capacityThisStep() for the S_cap·deltaT bridging (TEU/hour × seconds).
+     * @return Remaining capacity in TEU after committed departures and active
+     *         reservations are accounted for.
      */
     int getRemainingServiceCapacity() const;
 
@@ -339,7 +358,7 @@ private:
     struct HandlingMetadata
     {
         QString            executionId;
-        QString            pathIdentity;
+        QString            canonicalPathKey;
         QString            scenarioTerminalId;
         QString            runtimeTerminalId;
         int                terminalSequenceIndex = -1;
@@ -413,6 +432,9 @@ private:
      *         The /3600.0 bridge lives here so callers need not repeat it.
      */
     int capacityThisStep() const;
+    int remainingServiceCapacityLocked() const;
+    void resetRuntimeStateLocked(bool clearExecutionRecords);
+    void refreshServiceCapacityBudgetLocked();
 
     // Private SD helper methods
     double calculateCongestion(double utilization) const;
@@ -430,7 +452,8 @@ private:
     ContainerHandlingOutcome handleContainerArrivalLocked(
         const ContainerCore::Container &container,
         double                          addingTime,
-        TransportationMode              arrivalMode);
+        TransportationMode              arrivalMode,
+        TerminalArrivalSemantics        arrivalSemantics);
     void recordHandlingBatchLocked(
         const HandlingMetadata                &metadata,
         const QList<ContainerHandlingOutcome> &outcomes,
@@ -444,10 +467,11 @@ private:
         const QStringList &containerIds) const;
     QJsonArray removeContainersAndRecordPickupLocked(
         const QStringList &containerIds,
-        const QString     &eventType);
+        const QString     &eventType,
+        double             operationTime);
     QList<TerminalExecutionResult> terminalExecutionResultsLocked(
         const QString     &executionId,
-        const QStringList &pathIdentities) const;
+        const QStringList &canonicalPathKeys) const;
 };
 
 } // namespace TerminalSim

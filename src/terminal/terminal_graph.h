@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include "common.h"
 #include "terminal/terminal.h"
@@ -78,6 +79,7 @@ public:
     // Configuration
     void setCostFunctionParameters(const QVariantMap &params);
     void setLinkDefaultAttributes(const QVariantMap &attrs);
+    void resetConfigurationToDefaults();
 
     // Terminal management
     Terminal *addTerminal(const QVariantMap &terminalData);
@@ -108,6 +110,7 @@ public:
                 getAllTerminalNames(bool includeAliases = false) const;
     QVariantMap getTerminalStatus(const QString &name = QString()) const;
     void        clear();
+    int         resetRuntimeState(const QStringList &terminalIds = {});
 
     // Path finding
     QList<PathSegment>

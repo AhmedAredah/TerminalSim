@@ -3,6 +3,7 @@
 
 #include "Edge.h"
 #include "common/LogCategories.h"
+#include <algorithm>
 #include <QString>
 #include <set>
 #include <unordered_map>
@@ -61,6 +62,47 @@ public:
 
         m_adjacencyList[id] = std::vector<EdgeType>();
         m_vertices.insert(id);
+        return true;
+    }
+
+    /**
+     * @brief Remove a vertex and all incident edges.
+     * @param id Vertex id to remove
+     * @return true if the vertex existed and was removed
+     */
+    bool removeVertex(const VertexIdType &id)
+    {
+        if (m_adjacencyList.find(id) == m_adjacencyList.end())
+        {
+            qCDebug(lcGraph) << "Vertex does not exist:" << id;
+            return false;
+        }
+
+        for (auto &entry : m_adjacencyList)
+        {
+            auto &edges = entry.second;
+            edges.erase(std::remove_if(edges.begin(), edges.end(),
+                                       [&id](const EdgeType &edge) {
+                                           return edge.source() == id
+                                               || edge.target() == id;
+                                       }),
+                        edges.end());
+        }
+
+        for (auto it = m_edges.begin(); it != m_edges.end();)
+        {
+            if (std::get<0>(*it) == id || std::get<1>(*it) == id)
+            {
+                it = m_edges.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+
+        m_adjacencyList.erase(id);
+        m_vertices.erase(id);
         return true;
     }
 

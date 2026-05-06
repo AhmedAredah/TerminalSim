@@ -2,6 +2,7 @@
 
 #include <QMetaEnum>
 #include <QString>
+#include <stdexcept>
 #include "LogCategories.h"
 
 namespace TerminalSim {
@@ -22,29 +23,56 @@ QString EnumUtils::transportationModeToString(TransportationMode mode) {
     return QString(metaEnum.valueToKey(static_cast<int>(mode)));
 }
 
-TransportationMode EnumUtils::stringToTransportationMode(const QString& str) {
+std::optional<TransportationMode>
+EnumUtils::tryParseTransportationMode(const QString& str) {
     const QMetaEnum metaEnum = getTransportationModeEnum();
     bool ok = false;
+    const QString trimmed = str.trimmed();
     
     // Try to convert string to enum value
-    int value = metaEnum.keyToValue(str.toUtf8().constData(), &ok);
+    int value = metaEnum.keyToValue(trimmed.toUtf8().constData(), &ok);
     
     if (ok) {
         return static_cast<TransportationMode>(value);
     }
+
+    const QString normalized = trimmed.toLower();
+    if (normalized == QStringLiteral("any"))
+        return TransportationMode::Any;
+    if (normalized == QStringLiteral("ship"))
+        return TransportationMode::Ship;
+    if (normalized == QStringLiteral("truck"))
+        return TransportationMode::Truck;
+    if (normalized == QStringLiteral("train"))
+        return TransportationMode::Train;
     
     // Try to convert from number if string contains a number
-    value = str.toInt(&ok);
-    if (ok && value >= 0 &&
-        value <= static_cast<int>(TransportationMode::Ship)) {
-        return static_cast<TransportationMode>(value);
+    value = trimmed.toInt(&ok);
+    if (ok) {
+        switch (static_cast<TransportationMode>(value)) {
+            case TransportationMode::Any:
+            case TransportationMode::Ship:
+            case TransportationMode::Truck:
+            case TransportationMode::Train:
+                return static_cast<TransportationMode>(value);
+        }
     }
     
-    // Return default value if conversion fails
-    qCWarning(lcCommon) << "Invalid TransportationMode string:"
-                        << str
-                        << "- defaulting to Truck";
-    return TransportationMode::Truck;
+    return std::nullopt;
+}
+
+TransportationMode EnumUtils::parseTransportationMode(const QString& str) {
+    const auto parsed = tryParseTransportationMode(str);
+    if (parsed)
+        return *parsed;
+
+    qCWarning(lcCommon) << "Invalid TransportationMode string:" << str;
+    throw std::invalid_argument(
+        QString("Invalid TransportationMode: %1").arg(str).toStdString());
+}
+
+TransportationMode EnumUtils::stringToTransportationMode(const QString& str) {
+    return parseTransportationMode(str);
 }
 
 QString EnumUtils::terminalInterfaceToString(TerminalInterface interface) {
@@ -52,30 +80,53 @@ QString EnumUtils::terminalInterfaceToString(TerminalInterface interface) {
     return QString(metaEnum.valueToKey(static_cast<int>(interface)));
 }
 
-TerminalInterface EnumUtils::stringToTerminalInterface(const QString& str) {
+std::optional<TerminalInterface>
+EnumUtils::tryParseTerminalInterface(const QString& str) {
     const QMetaEnum metaEnum = getTerminalInterfaceEnum();
     bool ok = false;
+    const QString trimmed = str.trimmed();
     
     // Try to convert string to enum value
-    int value = metaEnum.keyToValue(str.toUtf8().constData(), &ok);
+    int value = metaEnum.keyToValue(trimmed.toUtf8().constData(), &ok);
     
     if (ok) {
         return static_cast<TerminalInterface>(value);
     }
+
+    const QString normalized = trimmed.toLower();
+    if (normalized == QStringLiteral("land_side")
+        || normalized == QStringLiteral("land"))
+        return TerminalInterface::LAND_SIDE;
+    if (normalized == QStringLiteral("sea_side")
+        || normalized == QStringLiteral("sea"))
+        return TerminalInterface::SEA_SIDE;
+    if (normalized == QStringLiteral("air_side")
+        || normalized == QStringLiteral("air"))
+        return TerminalInterface::AIR_SIDE;
     
     // Try to convert from number if string contains a number
-    value = str.toInt(&ok);
+    value = trimmed.toInt(&ok);
     if (ok && value >= 0
         && value <= static_cast<int>(TerminalInterface::AIR_SIDE))
     {
         return static_cast<TerminalInterface>(value);
     }
 
-    // Return default value if conversion fails
-    qCWarning(lcCommon) << "Invalid TerminalInterface string:"
-                        << str
-                        << "- defaulting to LAND_SIDE";
-    return TerminalInterface::LAND_SIDE;
+    return std::nullopt;
+}
+
+TerminalInterface EnumUtils::parseTerminalInterface(const QString& str) {
+    const auto parsed = tryParseTerminalInterface(str);
+    if (parsed)
+        return *parsed;
+
+    qCWarning(lcCommon) << "Invalid TerminalInterface string:" << str;
+    throw std::invalid_argument(
+        QString("Invalid TerminalInterface: %1").arg(str).toStdString());
+}
+
+TerminalInterface EnumUtils::stringToTerminalInterface(const QString& str) {
+    return parseTerminalInterface(str);
 }
 
 // Helper function to check if a transportation

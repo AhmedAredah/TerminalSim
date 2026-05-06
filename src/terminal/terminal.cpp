@@ -75,13 +75,29 @@ double expectedBaseDwellSeconds(const QString     &method,
     return 2.0 * 24.0 * 3600.0;
 }
 
+TerminalArrivalSemantics effectiveArrivalSemantics(
+    double                   addingTime,
+    TerminalArrivalSemantics requested)
+{
+    if (requested != TerminalArrivalSemantics::Infer)
+        return requested;
+
+    return addingTime < 0.0 ? TerminalArrivalSemantics::Preload
+                            : TerminalArrivalSemantics::RuntimeArrival;
+}
+
+bool isValidOperationTime(double operationTime)
+{
+    return std::isfinite(operationTime) && operationTime >= 0.0;
+}
+
 } // namespace
 
 QJsonObject TerminalHandlingBatchRecord::toJson() const
 {
     QJsonObject json;
     json["execution_id"] = executionId;
-    json["path_identity"] = pathIdentity;
+    json["canonical_path_key"] = canonicalPathKey;
     json["scenario_terminal_id"] = scenarioTerminalId;
     json["runtime_terminal_id"] = runtimeTerminalId;
     json["terminal_sequence_index"] = terminalSequenceIndex;
@@ -112,7 +128,7 @@ QJsonObject TerminalExecutionResult::toJson() const
 {
     QJsonObject json;
     json["execution_id"] = executionId;
-    json["path_identity"] = pathIdentity;
+    json["canonical_path_key"] = canonicalPathKey;
     json["scenario_terminal_id"] = scenarioTerminalId;
     json["runtime_terminal_id"] = runtimeTerminalId;
     json["terminal_sequence_index"] = terminalSequenceIndex;
@@ -134,13 +150,13 @@ QJsonObject TerminalExecutionResult::toJson() const
 
 bool Terminal::HandlingMetadata::isValid() const
 {
-    return !executionId.isEmpty() && !pathIdentity.isEmpty()
+    return !executionId.isEmpty() && !canonicalPathKey.isEmpty()
         && !scenarioTerminalId.isEmpty();
 }
 
 QString Terminal::HandlingMetadata::groupingKey() const
 {
-    return executionId + "|" + pathIdentity + "|"
+    return executionId + "|" + canonicalPathKey + "|"
         + scenarioTerminalId + "|" + runtimeTerminalId + "|"
         + QString::number(terminalSequenceIndex);
 }
@@ -283,6 +299,7 @@ Terminal::Terminal(
         if (m_sdParams.enabled) {
             m_sdState.serviceCapacity = m_sdParams.maxServiceRate;
             m_sdState.delayMultiplier = 1.0;
+            refreshServiceCapacityBudgetLocked();
             qCDebug(lcTerminal) << "System dynamics enabled for terminal" << m_terminalName
                                << "with critical utilization:" << m_sdParams.criticalUtilization
                                << "max service rate:" << m_sdParams.maxServiceRate;
@@ -477,23 +494,31 @@ bool Terminal::canAcceptTransport(TransportationMode mode,
 
 void Terminal::addContainer(const ContainerCore::Container& container,
                             double addingTime,
-                            TransportationMode arrivalMode)
+                            TransportationMode arrivalMode,
+                            TerminalArrivalSemantics arrivalSemantics)
 {
     QMutexLocker locker(&m_mutex);
     const QJsonObject before = runtimeTerminalSnapshotLocked();
     const HandlingMetadata metadata =
         extractHandlingMetadataLocked(container, arrivalMode);
+    const TerminalArrivalSemantics effectiveSemantics =
+        effectiveArrivalSemantics(addingTime, arrivalSemantics);
     const auto outcome = handleContainerArrivalLocked(
-        container, addingTime, arrivalMode);
-    recordHandlingBatchLocked(metadata, QList<ContainerHandlingOutcome>{outcome}, before,
-                              runtimeTerminalSnapshotLocked(),
-                              QStringLiteral("arrival_dropoff"));
+        container, addingTime, arrivalMode, effectiveSemantics);
+    if (effectiveSemantics == TerminalArrivalSemantics::RuntimeArrival) {
+        recordHandlingBatchLocked(metadata,
+                                  QList<ContainerHandlingOutcome>{outcome},
+                                  before,
+                                  runtimeTerminalSnapshotLocked(),
+                                  QStringLiteral("arrival_dropoff"));
+    }
 }
 
 void
-Terminal::addContainers(const QVector<ContainerCore::Container>& containers,
+Terminal::addContainers(const QList<ContainerCore::Container>& containers,
                         double addingTime,
-                        TransportationMode arrivalMode)
+                        TransportationMode arrivalMode,
+                        TerminalArrivalSemantics arrivalSemantics)
 {
     QMutexLocker locker(&m_mutex);
 
@@ -521,6 +546,8 @@ Terminal::addContainers(const QVector<ContainerCore::Container>& containers,
 
     QHash<QString, HandlingMetadata> groupedMetadata;
     QHash<QString, QList<ContainerHandlingOutcome>> groupedOutcomes;
+    const TerminalArrivalSemantics effectiveSemantics =
+        effectiveArrivalSemantics(addingTime, arrivalSemantics);
 
     for (const ContainerCore::Container& container : containers) {
         const HandlingMetadata metadata =
@@ -529,27 +556,30 @@ Terminal::addContainers(const QVector<ContainerCore::Container>& containers,
         if (!groupedMetadata.contains(key))
             groupedMetadata.insert(key, metadata);
         groupedOutcomes[key].append(handleContainerArrivalLocked(
-            container, addingTime, arrivalMode));
+            container, addingTime, arrivalMode, effectiveSemantics));
     }
 
     const QJsonObject stateSnapshotAfter =
         runtimeTerminalSnapshotLocked();
-    for (auto it = groupedOutcomes.constBegin();
-         it != groupedOutcomes.constEnd(); ++it) {
-        recordHandlingBatchLocked(groupedMetadata.value(it.key()),
-                                  it.value(),
-                                  stateSnapshotBefore,
-                                  stateSnapshotAfter,
-                                  QStringLiteral("arrival_dropoff"));
+    if (effectiveSemantics == TerminalArrivalSemantics::RuntimeArrival) {
+        for (auto it = groupedOutcomes.constBegin();
+             it != groupedOutcomes.constEnd(); ++it) {
+            recordHandlingBatchLocked(groupedMetadata.value(it.key()),
+                                      it.value(),
+                                      stateSnapshotBefore,
+                                      stateSnapshotAfter,
+                                      QStringLiteral("arrival_dropoff"));
+        }
     }
 }
 
 void Terminal::addContainersFromJson(const QJsonObject& containers,
                                      double addingTime,
-                                     TransportationMode arrivalMode)
+                                     TransportationMode arrivalMode,
+                                     TerminalArrivalSemantics arrivalSemantics)
 {
     // Parse the containers from JSON
-    QVector<ContainerCore::Container> containerList;
+    QList<ContainerCore::Container> containerList;
     
     try {
         // Check if it's a container array
@@ -595,7 +625,7 @@ void Terminal::addContainersFromJson(const QJsonObject& containers,
                         << "containers from JSON to terminal" << m_terminalName;
     
     // Add the containers
-    addContainers(containerList, addingTime, arrivalMode);
+    addContainers(containerList, addingTime, arrivalMode, arrivalSemantics);
 }
 
 QJsonArray
@@ -672,25 +702,25 @@ Terminal::getContainers(
 }
 
 QJsonArray
-Terminal::dequeueContainersByNextDestination(const QString& destination)
+Terminal::dequeueContainersByNextDestination(const QString& destination,
+                                             double operationTime)
 {
     ContainerCore::ContainerSelectionCriteria criteria;
     criteria.nextDestination = destination;
-    return dequeueContainers(criteria);
+    return dequeueContainers(criteria, operationTime);
 }
 
 QJsonArray
 Terminal::dequeueContainers(
-    const ContainerCore::ContainerSelectionCriteria &criteria)
+    const ContainerCore::ContainerSelectionCriteria &criteria,
+    double operationTime)
 {
     QMutexLocker locker(&m_mutex);
 
     ContainerCore::ContainerSelectionCriteria effectiveCriteria = criteria;
     int remainingCapacity = -1;
     if (m_sdParams.enabled) {
-        remainingCapacity = capacityThisStep()
-            - m_sdState.departuresThisStep
-            - m_reservedContainerIds.size();
+        remainingCapacity = remainingServiceCapacityLocked();
         if (remainingCapacity <= 0) {
             qCWarning(lcTerminal) << "SD: Service capacity exhausted at terminal"
                                   << m_terminalName
@@ -713,7 +743,7 @@ Terminal::dequeueContainers(
     }
 
     QJsonArray result = removeContainersAndRecordPickupLocked(
-        selectedIds, QStringLiteral("pickup_departure"));
+        selectedIds, QStringLiteral("pickup_departure"), operationTime);
 
     qCDebug(lcTerminal) << "Removed" << result.size()
                         << "containers matching criteria from terminal"
@@ -765,9 +795,7 @@ QJsonObject Terminal::reserveContainers(
 
     ContainerCore::ContainerSelectionCriteria effectiveCriteria = criteria;
     if (m_sdParams.enabled) {
-        const int remainingCapacity =
-            capacityThisStep() - m_sdState.departuresThisStep
-            - m_reservedContainerIds.size();
+        const int remainingCapacity = remainingServiceCapacityLocked();
         if (remainingCapacity <= 0) {
             QJsonObject response;
             response.insert(QStringLiteral("reservation_id"),
@@ -815,7 +843,8 @@ QJsonObject Terminal::reserveContainers(
 }
 
 QJsonObject Terminal::commitContainerReservation(
-    const QString &reservationId)
+    const QString &reservationId,
+    double operationTime)
 {
     if (reservationId.trimmed().isEmpty()) {
         throw std::invalid_argument(
@@ -860,7 +889,8 @@ QJsonObject Terminal::commitContainerReservation(
 
     const QJsonArray containers = removeContainersAndRecordPickupLocked(
         reservation.containerIds,
-        QStringLiteral("pickup_departure"));
+        QStringLiteral("pickup_departure"),
+        operationTime);
 
     QJsonObject response;
     response.insert(QStringLiteral("reservation_id"),
@@ -940,13 +970,18 @@ int Terminal::getMaxCapacity() const
 void Terminal::clear()
 {
     QMutexLocker locker(&m_mutex);
-    
+
     qCDebug(lcTerminal) << "Clearing all containers from terminal" << m_terminalName;
-    m_storage->clear();
-    m_containerReservations.clear();
-    m_reservedContainerIds.clear();
-    m_completedContainerReservations.clear();
-    m_releasedContainerReservations.clear();
+    resetRuntimeStateLocked(/*clearExecutionRecords=*/false);
+}
+
+void Terminal::resetRuntimeState()
+{
+    QMutexLocker locker(&m_mutex);
+
+    qCDebug(lcTerminal) << "Resetting runtime state for terminal"
+                        << m_terminalName;
+    resetRuntimeStateLocked(/*clearExecutionRecords=*/true);
 }
 
 QJsonObject Terminal::toJson() const
@@ -1086,6 +1121,10 @@ QJsonObject Terminal::toJson() const
         sdStateJson["utilization"] = m_sdState.utilization;
         sdStateJson["congestion"] = m_sdState.congestion;
         sdStateJson["service_capacity"] = m_sdState.serviceCapacity;
+        sdStateJson["service_capacity_this_step"] =
+            m_sdState.serviceCapacityThisStep;
+        sdStateJson["service_capacity_carryover_teu"] =
+            m_sdState.serviceCapacityCarryoverTeu;
         sdStateJson["delay_multiplier"] = m_sdState.delayMultiplier;
         json["system_dynamics_state"] = sdStateJson;
     }
@@ -1464,6 +1503,10 @@ QJsonObject Terminal::runtimeTerminalSnapshotLocked() const
     currentState["utilization"] = m_sdState.utilization;
     currentState["congestion"] = m_sdState.congestion;
     currentState["service_capacity"] = m_sdState.serviceCapacity;
+    currentState["service_capacity_this_step"] =
+        m_sdState.serviceCapacityThisStep;
+    currentState["service_capacity_carryover_teu"] =
+        m_sdState.serviceCapacityCarryoverTeu;
     currentState["delay_multiplier"] = m_sdState.delayMultiplier;
     currentState["arrivals_this_step"] = m_sdState.arrivalsThisStep;
     currentState["departures_this_step"] = m_sdState.departuresThisStep;
@@ -1478,7 +1521,7 @@ QJsonObject Terminal::runtimeTerminalSnapshotLocked() const
                       m_sdState.utilization, TransportationMode::Train)}};
     state["state"] = currentState;
 
-    state["remaining_service_capacity"] = getRemainingServiceCapacity();
+    state["remaining_service_capacity"] = remainingServiceCapacityLocked();
     state["container_count"] = m_storage ? m_storage->size() : 0;
     state["max_capacity"] = m_maxCapacity;
     return state;
@@ -1491,8 +1534,8 @@ Terminal::HandlingMetadata Terminal::extractHandlingMetadataLocked(
     HandlingMetadata metadata;
     metadata.executionId =
         customVariableString(container, "execution_id");
-    metadata.pathIdentity =
-        customVariableString(container, "path_identity");
+    metadata.canonicalPathKey =
+        customVariableString(container, "canonical_path_key");
     metadata.scenarioTerminalId =
         customVariableString(container, "scenario_terminal_id");
     metadata.runtimeTerminalId =
@@ -1518,7 +1561,8 @@ Terminal::HandlingMetadata Terminal::extractHandlingMetadataLocked(
 Terminal::ContainerHandlingOutcome Terminal::handleContainerArrivalLocked(
     const ContainerCore::Container &container,
     double                          addingTime,
-    TransportationMode              arrivalMode)
+    TransportationMode              arrivalMode,
+    TerminalArrivalSemantics        arrivalSemantics)
 {
     // Caller must hold m_mutex.
     QPair<bool, QString> capacityStatus =
@@ -1538,11 +1582,15 @@ Terminal::ContainerHandlingOutcome Terminal::handleContainerArrivalLocked(
 
     ContainerHandlingOutcome outcome;
     ContainerCore::Container *containerCopy = container.copy();
+    const bool isRuntimeArrival =
+        arrivalSemantics == TerminalArrivalSemantics::RuntimeArrival;
     outcome.containerId = containerCopy->getContainerID();
-    outcome.baseAddingTime = (addingTime < 0) ? 0.0 : addingTime;
+    outcome.baseAddingTime = addingTime >= 0.0
+        ? addingTime
+        : (isRuntimeArrival ? m_sdState.lastUpdateTime : 0.0);
     outcome.baseDeparture = outcome.baseAddingTime;
 
-    if (addingTime >= 0) {
+    if (isRuntimeArrival) {
         if (!m_dwellTimeMethod.isEmpty() && !m_dwellTimeParameters.isEmpty()) {
             const double rawDeparture =
                 ContainerDwellTime::getDepartureTime(
@@ -1619,12 +1667,13 @@ Terminal::ContainerHandlingOutcome Terminal::handleContainerArrivalLocked(
         }
     }
 
-    if (m_sdParams.enabled) {
+    if (m_sdParams.enabled && isRuntimeArrival) {
         m_sdState.arrivalsThisStep++;
     }
 
-    outcome.directCostUsd = estimateContainerCostInternal(
-        containerCopy, outcome.customsApplied);
+    outcome.directCostUsd = isRuntimeArrival
+        ? estimateContainerCostInternal(containerCopy, outcome.customsApplied)
+        : 0.0;
 
     const QVariant costSoFar = containerCopy->getCustomVariable(
         NoHauler::noHauler, "cost");
@@ -1635,8 +1684,10 @@ Terminal::ContainerHandlingOutcome Terminal::handleContainerArrivalLocked(
         if (ok)
             totalCost += previousCost;
     }
-    containerCopy->addCustomVariable(
-        NoHauler::noHauler, "cost", totalCost);
+    if (isRuntimeArrival || outcome.directCostUsd != 0.0) {
+        containerCopy->addCustomVariable(
+            NoHauler::noHauler, "cost", totalCost);
+    }
 
     outcome.totalHandlingSeconds =
         outcome.baseDeparture - outcome.baseAddingTime;
@@ -1649,8 +1700,10 @@ Terminal::ContainerHandlingOutcome Terminal::handleContainerArrivalLocked(
         if (ok)
             totalTime += previousTime;
     }
-    containerCopy->addCustomVariable(
-        NoHauler::noHauler, "time", totalTime);
+    if (isRuntimeArrival || outcome.totalHandlingSeconds != 0.0) {
+        containerCopy->addCustomVariable(
+            NoHauler::noHauler, "time", totalTime);
+    }
     containerCopy->setContainerCurrentLocation(m_terminalName);
     m_storage->addContainer(containerCopy->getContainerID(),
                             containerCopy,
@@ -1677,7 +1730,7 @@ void Terminal::recordHandlingBatchLocked(
 
     TerminalHandlingBatchRecord batch;
     batch.executionId = metadata.executionId;
-    batch.pathIdentity = metadata.pathIdentity;
+    batch.canonicalPathKey = metadata.canonicalPathKey;
     batch.scenarioTerminalId = metadata.scenarioTerminalId;
     batch.runtimeTerminalId = metadata.runtimeTerminalId;
     batch.terminalSequenceIndex = metadata.terminalSequenceIndex;
@@ -1747,10 +1800,12 @@ QJsonArray Terminal::containersSnapshotLocked(
 
 QJsonArray Terminal::removeContainersAndRecordPickupLocked(
     const QStringList &containerIds,
-    const QString     &eventType)
+    const QString     &eventType,
+    double             operationTime)
 {
     const QJsonObject stateSnapshotBefore =
         runtimeTerminalSnapshotLocked();
+    const bool hasOperationTime = isValidOperationTime(operationTime);
 
     QJsonArray result;
     QHash<QString, HandlingMetadata> groupedMetadata;
@@ -1772,10 +1827,11 @@ QJsonArray Terminal::removeContainersAndRecordPickupLocked(
 
         ContainerHandlingOutcome outcome;
         outcome.containerId = container->getContainerID();
-        outcome.baseAddingTime =
-            std::isnan(container->getContainerLeavingTime())
-                ? m_sdState.lastUpdateTime
-                : container->getContainerLeavingTime();
+        outcome.baseAddingTime = hasOperationTime
+            ? operationTime
+            : (std::isnan(container->getContainerLeavingTime())
+                   ? m_sdState.lastUpdateTime
+                   : container->getContainerLeavingTime());
         groupedOutcomes[key].append(outcome);
 
         m_storage->removeContainerByID(containerId);
@@ -1797,16 +1853,16 @@ QJsonArray Terminal::removeContainersAndRecordPickupLocked(
 
 QList<TerminalExecutionResult> Terminal::terminalExecutionResultsLocked(
     const QString     &executionId,
-    const QStringList &pathIdentities) const
+    const QStringList &canonicalPathKeys) const
 {
-    const QSet<QString> pathIdentityFilter(
-        pathIdentities.cbegin(), pathIdentities.cend());
+    const QSet<QString> canonicalPathKeyFilter(
+        canonicalPathKeys.cbegin(), canonicalPathKeys.cend());
 
     auto appendRecords = [&](const QList<TerminalHandlingBatchRecord> &records,
                              QList<TerminalHandlingBatchRecord>       &dest) {
         for (const auto &record : records) {
-            if (!pathIdentityFilter.isEmpty()
-                && !pathIdentityFilter.contains(record.pathIdentity)) {
+            if (!canonicalPathKeyFilter.isEmpty()
+                && !canonicalPathKeyFilter.contains(record.canonicalPathKey)) {
                 continue;
             }
             dest.append(record);
@@ -1827,7 +1883,7 @@ QList<TerminalExecutionResult> Terminal::terminalExecutionResultsLocked(
     QHash<QString, TerminalExecutionResult> grouped;
     QList<QString> order;
     for (const auto &record : selected) {
-        const QString key = record.executionId + "|" + record.pathIdentity
+        const QString key = record.executionId + "|" + record.canonicalPathKey
             + "|" + record.scenarioTerminalId + "|"
             + record.runtimeTerminalId + "|"
             + QString::number(record.terminalSequenceIndex);
@@ -1835,7 +1891,7 @@ QList<TerminalExecutionResult> Terminal::terminalExecutionResultsLocked(
         if (!grouped.contains(key)) {
             TerminalExecutionResult result;
             result.executionId = record.executionId;
-            result.pathIdentity = record.pathIdentity;
+            result.canonicalPathKey = record.canonicalPathKey;
             result.scenarioTerminalId = record.scenarioTerminalId;
             result.runtimeTerminalId = record.runtimeTerminalId;
             result.terminalSequenceIndex = record.terminalSequenceIndex;
@@ -1876,8 +1932,8 @@ QList<TerminalExecutionResult> Terminal::terminalExecutionResultsLocked(
                  const TerminalExecutionResult &rhs) {
                   if (lhs.executionId != rhs.executionId)
                       return lhs.executionId < rhs.executionId;
-                  if (lhs.pathIdentity != rhs.pathIdentity)
-                      return lhs.pathIdentity < rhs.pathIdentity;
+                  if (lhs.canonicalPathKey != rhs.canonicalPathKey)
+                      return lhs.canonicalPathKey < rhs.canonicalPathKey;
                   if (lhs.terminalSequenceIndex != rhs.terminalSequenceIndex)
                       return lhs.terminalSequenceIndex < rhs.terminalSequenceIndex;
                   return lhs.runtimeTerminalId < rhs.runtimeTerminalId;
@@ -1892,6 +1948,13 @@ void Terminal::updateSystemDynamics(double currentTime, double deltaT)
     if (!m_sdParams.enabled)
     {
         return;
+    }
+
+    if (!std::isfinite(currentTime) || !std::isfinite(deltaT)
+        || deltaT <= 0.0)
+    {
+        throw std::invalid_argument(
+            "current_time and positive delta_t are required for system dynamics");
     }
 
     // Store time step for service capacity calculations
@@ -1916,6 +1979,7 @@ void Terminal::updateSystemDynamics(double currentTime, double deltaT)
 
     // Calculate service capacity S_k^cap(t)
     m_sdState.serviceCapacity = calculateServiceCapacity(m_sdState.congestion);
+    refreshServiceCapacityBudgetLocked();
 
     // Calculate delay multiplier M_k(t)
     // Store legacy multiplier for backward compatibility (mode=Any)
@@ -1967,12 +2031,12 @@ QJsonObject Terminal::getRuntimeTerminalProjectionsByMode() const
 
 QJsonArray Terminal::getTerminalExecutionResults(
     const QString     &executionId,
-    const QStringList &pathIdentities) const
+    const QStringList &canonicalPathKeys) const
 {
     QMutexLocker locker(&m_mutex);
     QJsonArray   results;
     for (const auto &result :
-         terminalExecutionResultsLocked(executionId, pathIdentities)) {
+         terminalExecutionResultsLocked(executionId, canonicalPathKeys)) {
         results.append(result.toJson());
     }
     return results;
@@ -2006,23 +2070,80 @@ double Terminal::getDelayMultiplier(TransportationMode mode) const
 
 int Terminal::getRemainingServiceCapacity() const
 {
+    QMutexLocker locker(&m_mutex);
+    return remainingServiceCapacityLocked();
+}
+
+int Terminal::remainingServiceCapacityLocked() const
+{
     if (!m_sdParams.enabled)
     {
         return std::numeric_limits<int>::max(); // Unlimited if SD disabled
     }
 
-    // Remaining capacity = capacityThisStep - departuresThisStep
-    int totalCapacityThisStep = capacityThisStep();
-    int remaining = totalCapacityThisStep - m_sdState.departuresThisStep;
+    const int reservedContainers = m_reservedContainerIds.size();
+    int remaining = capacityThisStep() - m_sdState.departuresThisStep
+        - reservedContainers;
     return std::max(0, remaining);
 }
 
 int Terminal::capacityThisStep() const
 {
     // Caller must hold m_mutex (or be on a read-only path).
-    // serviceCapacity is TEU/hour; deltaT is seconds.
-    return static_cast<int>(m_sdState.serviceCapacity
-                            * (m_sdState.deltaT / 3600.0));
+    return m_sdState.serviceCapacityThisStep;
+}
+
+void Terminal::resetRuntimeStateLocked(bool clearExecutionRecords)
+{
+    // Caller must hold m_mutex.
+    if (m_storage)
+        m_storage->clear();
+    m_containerReservations.clear();
+    m_reservedContainerIds.clear();
+    m_completedContainerReservations.clear();
+    m_releasedContainerReservations.clear();
+    if (clearExecutionRecords)
+        m_handlingBatchRecordsByExecution.clear();
+
+    m_sdState = SystemDynamicsState{};
+    if (m_sdParams.enabled) {
+        m_sdState.serviceCapacity = m_sdParams.maxServiceRate;
+        m_sdState.delayMultiplier = 1.0;
+        refreshServiceCapacityBudgetLocked();
+    }
+}
+
+void Terminal::refreshServiceCapacityBudgetLocked()
+{
+    // Caller must hold m_mutex.
+    if (!m_sdParams.enabled) {
+        m_sdState.serviceCapacityThisStep =
+            std::numeric_limits<int>::max();
+        m_sdState.serviceCapacityCarryoverTeu = 0.0;
+        return;
+    }
+
+    if (!std::isfinite(m_sdState.serviceCapacity)
+        || !std::isfinite(m_sdState.deltaT)
+        || m_sdState.serviceCapacity < 0.0
+        || m_sdState.deltaT <= 0.0)
+    {
+        throw std::invalid_argument(
+            "Invalid service capacity state for terminal SD budget");
+    }
+
+    const double rawCapacity =
+        m_sdState.serviceCapacity * (m_sdState.deltaT / 3600.0)
+        + m_sdState.serviceCapacityCarryoverTeu;
+    const double wholeCapacity = std::floor(rawCapacity);
+    const double boundedWhole =
+        std::min<double>(wholeCapacity,
+                         std::numeric_limits<int>::max());
+
+    m_sdState.serviceCapacityThisStep =
+        static_cast<int>(boundedWhole);
+    m_sdState.serviceCapacityCarryoverTeu =
+        rawCapacity - wholeCapacity;
 }
 
 } // namespace TerminalSim
