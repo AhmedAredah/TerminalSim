@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a reproducible TerminalSim defect.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the issue in a few sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest set of commands, configuration, and input data needed to reproduce the issue.
+      placeholder: |
+        1. Configure with ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: OS, compiler, and Qt version
+      description: Include operating system, compiler version, CMake version, and Qt version.
+      placeholder: |
+        OS:
+        Compiler:
+        CMake:
+        Qt:
+    validations:
+      required: true
+  - type: input
+    id: rabbitmq
+    attributes:
+      label: RabbitMQ-C version
+      description: Include the installed RabbitMQ-C package or library version.
+      placeholder: "Example: librabbitmq-dev 0.11.0"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste relevant build, runtime, or test logs.
+      render: shell
+    validations:
+      required: false

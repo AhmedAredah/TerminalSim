@@ -1,5 +1,5 @@
 <h1 align="center">
-  <a href="https://github.com/VTTI-CSM/TerminalSim">
+  <a href="https://github.com/AhmedAredah/TerminalSim">
     <img src="https://github.com/user-attachments/assets/40967d47-1d00-4eea-b590-b395b9cb25e0" alt="TerminalSim" width="200px"/>
 
   </a>
@@ -11,22 +11,31 @@
 <!--   <a href="http://dx.doi.org/10.1109/SM63044.2024.10733439">
     <img src="https://zenodo.org/badge/DOI/10.1109/SM63044.2024.10733439.svg" alt="DOI">
   </a> -->
+  <a href="https://github.com/AhmedAredah/TerminalSim/actions/workflows/build.yml">
+    <img src="https://github.com/AhmedAredah/TerminalSim/actions/workflows/build.yml/badge.svg" alt="Build">
+  </a>
   <a href="https://www.gnu.org/licenses/gpl-3.0">
     <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GNU GPL v3">
   </a>
-  <a href="https://github.com/VTTI-CSM/TerminalSim/releases">
-    <img alt="GitHub tag (latest by date)" src="https://img.shields.io/github/v/tag/VTTI-CSM/TerminalSim.svg?label=latest">
+  <a href="https://en.cppreference.com/w/cpp/17">
+    <img src="https://img.shields.io/badge/C%2B%2B-17-blue.svg" alt="C++17">
   </a>
-  <img alt="GitHub All Releases" src="https://img.shields.io/github/downloads/VTTI-CSM/TerminalSim/total.svg">
-  <a href="">
+  <a href="https://www.qt.io/">
+    <img src="https://img.shields.io/badge/Qt-6-41cd52.svg" alt="Qt 6">
+  </a>
+  <a href="https://github.com/AhmedAredah/TerminalSim/releases">
+    <img alt="GitHub tag (latest by date)" src="https://img.shields.io/github/v/tag/AhmedAredah/TerminalSim.svg?label=latest">
+  </a>
+  <img alt="GitHub All Releases" src="https://img.shields.io/github/downloads/AhmedAredah/TerminalSim/total.svg">
+  <a href="https://cla-assistant.io/AhmedAredah/TerminalSim">
     <img src="https://img.shields.io/badge/CLA-CLA%20Required-red" alt="CLA Required">
-    <a href="https://cla-assistant.io/AhmedAredah/TerminalSim"><img src="https://cla-assistant.io/readme/badge/AhmedAredah/TerminalSim" alt="CLA assistant" /></a>
+    <img src="https://cla-assistant.io/readme/badge/AhmedAredah/TerminalSim" alt="CLA assistant" />
   </a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/VTTI-CSM/TerminalSim/releases" target="_blank">Download TerminalSim</a> |
-  <a href="https://VTTI-CSM.github.io/TerminalSim/" target="_blank">Documentation</a>
+  <a href="https://github.com/AhmedAredah/TerminalSim/releases" target="_blank">Download TerminalSim</a> |
+  <a href="https://ahmedaredah.github.io/TerminalSim/" target="_blank">Documentation</a>
 </p>
 
 <p align="center">
