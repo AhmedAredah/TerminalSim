@@ -1,6 +1,12 @@
 # Windows deploy: run windeployqt against the installed binary so all required
 # Qt DLLs and plugins are copied into bin/. Also drop RabbitMQ-C and Container
 # DLLs next to the executable.
+#
+# windeployqt only follows the Qt imports of the binaries you point it at, so
+# we feed it Container.dll alongside terminal_simulation.exe. Qt modules pulled
+# in transitively via Container (e.g. Qt6Sql for the SQLite-backed container
+# store) would otherwise be missed and the installed app would fail to start
+# with STATUS_DLL_NOT_FOUND (0xC0000135).
 
 find_program(WINDEPLOYQT_BIN
     NAMES windeployqt windeployqt6
@@ -36,8 +42,17 @@ install(CODE "
         return()
     endif()
 
+    # Container.dll links Qt modules (e.g. Qt6Sql) that the main executable
+    # does not import directly. Pass it to windeployqt as an extra input so
+    # its Qt closure ends up in the bundle.
+    set(_extra_targets)
+    set(_container_installed \"\${_root}/bin/Container.dll\")
+    if(EXISTS \"\${_container_installed}\")
+        list(APPEND _extra_targets \"\${_container_installed}\")
+    endif()
+
     if(NOT \"${WINDEPLOYQT_BIN}\" STREQUAL \"WINDEPLOYQT_BIN-NOTFOUND\")
-        message(STATUS \"Running windeployqt on \${_bin}\")
+        message(STATUS \"Running windeployqt on \${_bin} \${_extra_targets}\")
         execute_process(
             COMMAND \"${WINDEPLOYQT_BIN}\"
                     --release
@@ -46,6 +61,7 @@ install(CODE "
                     --no-opengl-sw
                     --compiler-runtime
                     \"\${_bin}\"
+                    \${_extra_targets}
             RESULT_VARIABLE _rc)
         if(NOT _rc EQUAL 0)
             message(WARNING \"windeployqt returned \${_rc}\")
