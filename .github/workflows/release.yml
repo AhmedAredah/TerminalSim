@@ -233,9 +233,20 @@ jobs:
         shell: pwsh
         run: |
           # The vcpkg port is named 'librabbitmq' upstream; the resulting
-          # CMake config still installs under share/rabbitmq-c.
-          vcpkg install librabbitmq:x64-windows
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg install librabbitmq failed" }
+          # CMake config still installs under share/rabbitmq-c. Retry on
+          # transient network failures (SSL connect, DNS).
+          $attempts = 0
+          $maxAttempts = 4
+          while ($attempts -lt $maxAttempts) {
+              $attempts++
+              vcpkg install librabbitmq:x64-windows
+              if ($LASTEXITCODE -eq 0) { break }
+              if ($attempts -ge $maxAttempts) {
+                  throw "vcpkg install librabbitmq failed after $attempts attempts"
+              }
+              Write-Warning "vcpkg attempt $attempts failed; retrying in 15s..."
+              Start-Sleep -Seconds 15
+          }
 
           $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
           $rabbitCmakeDir = Get-ChildItem -Recurse `
