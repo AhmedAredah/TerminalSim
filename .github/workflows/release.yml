@@ -124,6 +124,8 @@ jobs:
             -DRABBITMQ_CMAKE_DIR="/usr/lib/x86_64-linux-gnu/cmake/rabbitmq-c" \
             -DCPACK_IFW_ROOT="${QTIFW_ROOT}" \
             -DBUILD_INSTALLER=ON \
+            -DBUILD_TESTING=OFF \
+            -DTERMINALSIM_BUILD_EXAMPLES=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER}"
 
       - name: Build TerminalSim
@@ -278,7 +280,9 @@ jobs:
             -DCONTAINER_CMAKE_DIR="$env:DEPS_PREFIX\lib\cmake\Container" `
             -DRABBITMQ_CMAKE_DIR="$env:RABBITMQ_CMAKE_DIR" `
             -DCPACK_IFW_ROOT="$env:QTIFW_ROOT" `
-            -DBUILD_INSTALLER=ON
+            -DBUILD_INSTALLER=ON `
+            -DBUILD_TESTING=OFF `
+            -DTERMINALSIM_BUILD_EXAMPLES=OFF
 
       - name: Build TerminalSim
         shell: pwsh

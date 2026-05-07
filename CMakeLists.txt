@@ -143,9 +143,16 @@ include_directories(
 
 # Add subdirectories
 add_subdirectory(src)
-enable_testing()
-add_subdirectory(tests)
-add_subdirectory(examples)
+
+include(CTest) # defines BUILD_TESTING (default ON)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
+
+option(TERMINALSIM_BUILD_EXAMPLES "Build TerminalSim examples" ON)
+if(TERMINALSIM_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
 
 # Install rules (componentized so installers can split runtime / service / docs)
 install(TARGETS terminal_simulation
