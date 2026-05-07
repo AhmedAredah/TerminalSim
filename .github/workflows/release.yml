@@ -230,11 +230,26 @@ jobs:
       - name: Install RabbitMQ-C via vcpkg
         shell: pwsh
         run: |
-          vcpkg install rabbitmq-c:x64-windows
+          # The vcpkg port is named 'librabbitmq' upstream; the resulting
+          # CMake config still installs under share/rabbitmq-c.
+          vcpkg install librabbitmq:x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install librabbitmq failed" }
+
           $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          $rabbitCmakeDir = Get-ChildItem -Recurse `
+              -Path "$vcpkgRoot\installed\x64-windows\share" `
+              -Filter 'rabbitmq-c-config.cmake' -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty Directory
+          if (-not $rabbitCmakeDir) {
+              Write-Error "rabbitmq-c CMake config not found after vcpkg install."
+              Get-ChildItem "$vcpkgRoot\installed\x64-windows\share" -Recurse -Depth 2 |
+                  Format-Table FullName
+              exit 1
+          }
+
           "VCPKG_TOOLCHAIN_FILE=$vcpkgRoot\scripts\buildsystems\vcpkg.cmake" |
               Out-File -FilePath $env:GITHUB_ENV -Append
-          "RABBITMQ_CMAKE_DIR=$vcpkgRoot\installed\x64-windows\share\rabbitmq-c" |
+          "RABBITMQ_CMAKE_DIR=$($rabbitCmakeDir.FullName)" |
               Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Configure Container
