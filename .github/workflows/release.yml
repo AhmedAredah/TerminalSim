@@ -75,12 +75,19 @@ jobs:
           echo "Using Qt Installer Framework at ${ifw_root}"
 
       - name: Prepare RabbitMQ-C include compatibility
+        # Ubuntu 24.04 librabbitmq-dev ships flat /usr/include/amqp_*.h headers,
+        # but TerminalSim sources include them via the newer namespaced path
+        # (<rabbitmq-c/framing.h>, etc.). Create both spellings so any include
+        # form resolves.
         run: |
           mkdir -p "${DEPS_PREFIX}/include/rabbitmq-c"
           for header in /usr/include/amqp*.h; do
-            ln -sf "${header}" "${DEPS_PREFIX}/include/rabbitmq-c/$(basename "${header}")"
+            base=$(basename "${header}")
+            ln -sf "${header}" "${DEPS_PREFIX}/include/rabbitmq-c/${base}"
+            if [[ "${base}" == amqp_* ]]; then
+              ln -sf "${header}" "${DEPS_PREFIX}/include/rabbitmq-c/${base#amqp_}"
+            fi
           done
-          ln -sf /usr/include/amqp_tcp_socket.h "${DEPS_PREFIX}/include/rabbitmq-c/tcp_socket.h"
 
       - name: Cache compiler output
         uses: actions/cache@v4
