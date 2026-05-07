@@ -135,15 +135,19 @@ install(CODE "
         if(NOT EXISTS \"\${lib_dir}/\${_real_name}\")
             file(COPY \"\${_real}\" DESTINATION \"\${lib_dir}\")
         endif()
-        # Copy versioned symlinks alongside it.
+        # Recreate versioned symlink aliases pointing at the real file.
         get_filename_component(_dir \"\${so_path}\" DIRECTORY)
         get_filename_component(_stem \"\${_real_name}\" NAME_WE)
         file(GLOB _aliases LIST_DIRECTORIES FALSE \"\${_dir}/\${_stem}.so*\")
         foreach(_a IN LISTS _aliases)
-            get_filename_component(_a_name \"\${_a}\" NAME)
-            if(IS_SYMLINK \"\${_a}\" AND NOT EXISTS \"\${lib_dir}/\${_a_name}\")
-                file(COPY \"\${_a}\" DESTINATION \"\${lib_dir}\" FOLLOW_SYMLINK_CHAIN FALSE)
+            if(NOT IS_SYMLINK \"\${_a}\")
+                continue()
             endif()
+            get_filename_component(_a_name \"\${_a}\" NAME)
+            if(EXISTS \"\${lib_dir}/\${_a_name}\")
+                continue()
+            endif()
+            file(CREATE_LINK \"\${_real_name}\" \"\${lib_dir}/\${_a_name}\" SYMBOLIC)
         endforeach()
     endfunction()
 
