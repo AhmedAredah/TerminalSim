@@ -13,7 +13,11 @@
 #include <QTimer>
 #include <atomic>
 #include <stdexcept>
-#include <sys/time.h>
+#ifdef _WIN32
+#  include <winsock2.h>  // struct timeval
+#else
+#  include <sys/time.h>
+#endif
 
 #include <rabbitmq-c/amqp.h>
 #include <rabbitmq-c/tcp_socket.h>

@@ -9,6 +9,11 @@
 #include <QUuid>
 #include <chrono>
 #include <thread>
+#ifdef _WIN32
+#  include <winsock2.h>  // struct timeval
+#else
+#  include <sys/time.h>
+#endif
 
 #include "common/LogCategories.h"
 
