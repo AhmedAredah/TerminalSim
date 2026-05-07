@@ -373,8 +373,10 @@ jobs:
       - name: Add checksums to release notes
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release view "${GITHUB_REF_NAME}" --json body --jq '.body // ""' > release-body.md
+          gh release view "${GITHUB_REF_NAME}" --repo "${REPO}" \
+            --json body --jq '.body // ""' > release-body.md
 
           awk '
             /^## Checksums$/ { skip = 1; next }
@@ -393,4 +395,5 @@ jobs:
             done
           } > release-body-final.md
 
-          gh release edit "${GITHUB_REF_NAME}" --notes-file release-body-final.md
+          gh release edit "${GITHUB_REF_NAME}" --repo "${REPO}" \
+            --notes-file release-body-final.md
