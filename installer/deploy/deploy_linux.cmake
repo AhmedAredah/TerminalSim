@@ -174,14 +174,14 @@ install(CODE "
             endif()
             execute_process(COMMAND ldd \"\${_target}\"
                             OUTPUT_VARIABLE _ldd_out
-                            ERROR_QUIET
-                            OUTPUT_STRIP_TRAILING_WHITESPACE)
-            string(REPLACE \"\\n\" \";\" _lines \"\${_ldd_out}\")
-            foreach(_line IN LISTS _lines)
-                if(NOT _line MATCHES \"=> *(/[^ ]+)\")
-                    continue()
-                endif()
-                set(_path \"\${CMAKE_MATCH_1}\")
+                            ERROR_QUIET)
+            # Match every '=> /path' pair across the full ldd output.
+            # CMake's quoted-string \\n is the two characters backslash-n
+            # (not a newline), so per-line splitting is unreliable; use
+            # REGEX MATCHALL on the whole blob instead.
+            string(REGEX MATCHALL \"=> +/[^ \n]+\" _matches \"\${_ldd_out}\")
+            foreach(_match IN LISTS _matches)
+                string(REGEX REPLACE \"^=> +\" \"\" _path \"\${_match}\")
                 get_filename_component(_name \"\${_path}\" NAME)
                 _is_system_lib(\"\${_name}\" _is_sys)
                 if(_is_sys)
