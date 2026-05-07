@@ -58,24 +58,8 @@ jobs:
       - name: Install build dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: cmake qt6-base-dev qt6-tools-dev libqt6sql6-sqlite librabbitmq-dev build-essential ninja-build ccache python3-venv patchelf file fuse libfuse2
+          packages: cmake qt6-base-dev qt6-tools-dev libqt6sql6-sqlite librabbitmq-dev build-essential ninja-build ccache python3-venv patchelf file
           version: 1.0
-
-      - name: Install linuxdeploy
-        # Required for bundling transitive Qt dependencies (libb2, libdouble-conversion,
-        # libpcre2, ICU, etc.) into the install tree. Without it, our manual Qt copy
-        # fallback misses these and the binary fails to start on machines without
-        # the matching system packages.
-        run: |
-          curl --location --fail --silent --show-error \
-            -o /usr/local/bin/linuxdeploy \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          curl --location --fail --silent --show-error \
-            -o /usr/local/bin/linuxdeploy-plugin-qt \
-            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          chmod +x /usr/local/bin/linuxdeploy /usr/local/bin/linuxdeploy-plugin-qt
-          linuxdeploy --version
-          linuxdeploy-plugin-qt --help >/dev/null 2>&1 || true
 
       - name: Install Qt Installer Framework
         run: |
@@ -148,8 +132,6 @@ jobs:
         run: cmake --build build
 
       - name: Install TerminalSim
-        env:
-          QMAKE: /usr/bin/qmake6
         run: cmake --build build --target install
 
       - name: Generate Linux installer
