@@ -86,6 +86,12 @@ endif()
 # At install time: walk ldd, pull in transitive deps, then set RPATH on
 # everything. Runs both for `cmake --install` and during cpack staging.
 install(CODE "
+    # Required so 'while(TRUE)' / 'if(_var)' inside this install script behave
+    # consistently across CMake policy defaults.
+    cmake_policy(SET CMP0012 NEW)
+    if(POLICY CMP0130)
+        cmake_policy(SET CMP0130 NEW)
+    endif()
     set(_root \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}\")
     set(_bin  \"\${_root}/bin/terminal_simulation\")
     set(_lib  \"\${_root}/lib\")
