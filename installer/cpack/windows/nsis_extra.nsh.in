@@ -1,0 +1,15 @@
+; Optional NSIS extra commands. Hooked via CPACK_NSIS_EXTRA_INSTALL_COMMANDS
+; / CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS in CPackOptions.cmake.in. Kept here so
+; installer logic stays out of CMake and is easy to review by Windows packagers.
+;
+; This file is not parsed automatically; reference it from CPackOptions.cmake.in
+; with !include "@CMAKE_CURRENT_LIST_DIR@/windows/nsis_extra.nsh"
+
+!macro TerminalSimWriteRegistry
+    WriteRegStr HKLM "Software\TerminalSim" "InstallDir" "$INSTDIR"
+    WriteRegStr HKLM "Software\TerminalSim" "Version"    "@TERMINALSIM_INSTALLER_VERSION@"
+!macroend
+
+!macro TerminalSimRemoveRegistry
+    DeleteRegKey HKLM "Software\TerminalSim"
+!macroend

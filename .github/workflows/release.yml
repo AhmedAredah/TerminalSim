@@ -1,0 +1,187 @@
+# Linux release packaging for tagged TerminalSim releases.
+#
+# Windows and macOS installers are intentionally deferred until their signing,
+# notarization, and platform deployment requirements are settled.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BUILD_TYPE: Release
+  CONTAINER_REF: v0.2.0
+  DEPS_PREFIX: ${{ github.workspace }}/deps/install
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+  CMAKE_CXX_COMPILER_LAUNCHER: ccache
+
+jobs:
+  linux-installer:
+    name: Linux Installer
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out TerminalSim
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check Container token
+        env:
+          CONTAINER_REPO_TOKEN: ${{ secrets.CONTAINER_REPO_TOKEN }}
+        run: |
+          if [ -z "${CONTAINER_REPO_TOKEN}" ]; then
+            echo "::error::CONTAINER_REPO_TOKEN is required to check out the private Container dependency."
+            exit 1
+          fi
+
+      - name: Check out Container
+        uses: actions/checkout@v4
+        with:
+          repository: AhmedAredah/container
+          token: ${{ secrets.CONTAINER_REPO_TOKEN }}
+          ref: ${{ env.CONTAINER_REF }}
+          path: deps/container
+
+      - name: Install build dependencies
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: cmake qt6-base-dev qt6-tools-dev librabbitmq-dev build-essential ninja-build ccache python3-venv patchelf file
+          version: 1.0
+
+      - name: Install Qt Installer Framework
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/aqt"
+          "${RUNNER_TEMP}/aqt/bin/python" -m pip install --upgrade pip
+          "${RUNNER_TEMP}/aqt/bin/python" -m pip install "aqtinstall==3.3.0"
+          "${RUNNER_TEMP}/aqt/bin/python" -m aqt install-tool \
+            -O "${RUNNER_TEMP}/Qt" \
+            linux desktop tools_ifw
+
+          ifw_root="$(find "${RUNNER_TEMP}/Qt/Tools/QtInstallerFramework" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          if [ -z "${ifw_root}" ] || [ ! -x "${ifw_root}/bin/binarycreator" ]; then
+            echo "::error::Qt Installer Framework binarycreator was not installed."
+            exit 1
+          fi
+
+          echo "QTIFW_ROOT=${ifw_root}" >> "${GITHUB_ENV}"
+          echo "${ifw_root}/bin" >> "${GITHUB_PATH}"
+          echo "Using Qt Installer Framework at ${ifw_root}"
+
+      - name: Prepare RabbitMQ-C include compatibility
+        run: |
+          mkdir -p "${DEPS_PREFIX}/include/rabbitmq-c"
+          for header in /usr/include/amqp*.h; do
+            ln -sf "${header}" "${DEPS_PREFIX}/include/rabbitmq-c/$(basename "${header}")"
+          done
+          ln -sf /usr/include/amqp_tcp_socket.h "${DEPS_PREFIX}/include/rabbitmq-c/tcp_socket.h"
+
+      - name: Cache compiler output
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-release-ccache-${{ env.CONTAINER_REF }}-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt', 'installer/**') }}
+          restore-keys: |
+            ${{ runner.os }}-release-ccache-
+
+      - name: Configure Container
+        run: |
+          cmake -S deps/container -B deps/build/container -G Ninja \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_INSTALL_PREFIX="${DEPS_PREFIX}" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_PYTHON_BINDINGS=OFF \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_DOCS=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER}"
+
+      - name: Install Container
+        run: cmake --build deps/build/container --target install
+
+      - name: Configure TerminalSim with installer
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/build/install" \
+            -DCMAKE_PREFIX_PATH="${DEPS_PREFIX};/usr" \
+            -DCONTAINER_CMAKE_DIR="${DEPS_PREFIX}/lib/cmake/Container" \
+            -DRABBITMQ_CMAKE_DIR="/usr/lib/x86_64-linux-gnu/cmake/rabbitmq-c" \
+            -DCPACK_IFW_ROOT="${QTIFW_ROOT}" \
+            -DBUILD_INSTALLER=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER}"
+
+      - name: Build TerminalSim
+        run: cmake --build build
+
+      - name: Install TerminalSim
+        run: cmake --build build --target install
+
+      - name: Generate Linux installer
+        env:
+          QT_QPA_PLATFORM: offscreen
+        working-directory: build
+        run: cpack -G IFW -C Release
+
+      - name: Collect release assets
+        run: |
+          mkdir -p dist
+          ref_name="${GITHUB_REF_NAME//\//-}"
+          installer="$(find build -maxdepth 1 -type f -name 'TerminalSim*.run' | sort | head -n 1)"
+
+          if [ -z "${installer}" ]; then
+            echo "::error::No Linux installer .run file was produced by CPack."
+            find build -maxdepth 2 -type f | sort
+            exit 1
+          fi
+
+          installer_name="TerminalSim-${ref_name}-linux-x86_64.run"
+          cp "${installer}" "dist/${installer_name}"
+          checksum="$(sha256sum "dist/${installer_name}" | awk '{print $1}')"
+          printf '%s %s\n' "${checksum}" "${installer_name}" > release-checksums.txt
+          file "dist/${installer_name}"
+          cat release-checksums.txt
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TerminalSim-linux-installer
+          path: dist/*.run
+          if-no-files-found: error
+
+      - name: Attach assets to GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.run
+          generate_release_notes: true
+
+      - name: Add checksums to GitHub Release notes
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" --json body --jq '.body // ""' > release-body.md
+
+          awk '
+            /^## Checksums$/ { skip = 1; next }
+            skip && /^## / { skip = 0 }
+            !skip { print }
+          ' release-body.md > release-body-without-checksums.md
+
+          {
+            cat release-body-without-checksums.md
+            printf '\n## Checksums\n\n'
+            printf '| Asset | SHA256 |\n'
+            printf '| --- | --- |\n'
+            while read -r checksum asset_name; do
+              printf '| `%s` | `%s` |\n' "${asset_name}" "${checksum}"
+            done < release-checksums.txt
+          } > release-body-final.md
+
+          gh release edit "${GITHUB_REF_NAME}" --notes-file release-body-final.md

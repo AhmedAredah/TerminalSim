@@ -147,18 +147,18 @@ enable_testing()
 add_subdirectory(tests)
 add_subdirectory(examples)
 
-# Install targets
-# install(DIRECTORY include/ DESTINATION include)
+# Install rules (componentized so installers can split runtime / service / docs)
 install(TARGETS terminal_simulation
-        RUNTIME DESTINATION bin
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib)
+        RUNTIME DESTINATION bin           COMPONENT Runtime
+        LIBRARY DESTINATION lib           COMPONENT Runtime
+        ARCHIVE DESTINATION lib           COMPONENT Runtime)
 
-# Package configuration
-include(InstallRequiredSystemLibraries)
-set(CPACK_PACKAGE_VENDOR "Virginia Tech Transportation Institute - Center for Sustainable Mobility.")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "TerminalSim - A C++ library for simulating container terminals")
-set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
-set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
-set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
-include(CPack)
+install(FILES LICENSE README.md
+        DESTINATION share/terminalsim
+        COMPONENT Runtime)
+
+# Optional installer subproject (CPack + Qt Installer Framework, deploy, service files).
+option(BUILD_INSTALLER "Build the cross-platform installer subproject" OFF)
+if(BUILD_INSTALLER)
+    add_subdirectory(installer)
+endif()

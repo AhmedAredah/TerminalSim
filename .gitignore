@@ -37,3 +37,9 @@ CMakeLists.txt.user
 # Build directories
 /build/*
 **.DS_Store
+.memsearch/*
+docs/*
+build_release/*
+data/*
+build_installer/
+AGENTS.md

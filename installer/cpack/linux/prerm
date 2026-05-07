@@ -1,0 +1,17 @@
+#!/bin/sh
+# DEB prerm hook for TerminalSim. Stops and disables the unit on full removal,
+# but leaves config files behind so reinstall preserves operator choices.
+
+set -e
+
+case "$1" in
+    remove|purge)
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop    terminalsim.service 2>/dev/null || true
+            systemctl disable terminalsim.service 2>/dev/null || true
+        fi
+        rm -f /lib/systemd/system/terminalsim.service
+        ;;
+esac
+
+exit 0

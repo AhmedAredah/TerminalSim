@@ -1,0 +1,66 @@
+# Generator-specific CPack overrides. Read by cpack at packaging time, once per
+# generator invocation. Variables set here only take effect for the matching
+# CPACK_GENERATOR.
+
+# ---------------- DEB ----------------
+if(CPACK_GENERATOR STREQUAL "DEB")
+    set(CPACK_DEBIAN_PACKAGE_NAME            "terminalsim")
+    set(CPACK_DEBIAN_PACKAGE_SECTION         "science")
+    set(CPACK_DEBIAN_PACKAGE_PRIORITY        "optional")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER      "@TERMINALSIM_INSTALLER_CONTACT@")
+    set(CPACK_DEBIAN_PACKAGE_HOMEPAGE        "@TERMINALSIM_INSTALLER_HOMEPAGE@")
+    set(CPACK_DEBIAN_PACKAGE_DESCRIPTION     "@TERMINALSIM_INSTALLER_SUMMARY@")
+    # We bundle Qt and RabbitMQ-C, so we deliberately avoid declaring system
+    # library dependencies. The shlibdeps generator is disabled to keep the
+    # package self-contained.
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS       OFF)
+    set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+        "@INSTALLER_DIR@/cpack/linux/postinst;@INSTALLER_DIR@/cpack/linux/prerm")
+    set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
+    set(CPACK_DEBIAN_FILE_NAME               DEB-DEFAULT)
+    set(CPACK_DEBIAN_COMPRESSION_TYPE        "xz")
+endif()
+
+# ---------------- RPM ----------------
+if(CPACK_GENERATOR STREQUAL "RPM")
+    set(CPACK_RPM_PACKAGE_NAME       "terminalsim")
+    set(CPACK_RPM_PACKAGE_LICENSE    "@TERMINALSIM_INSTALLER_LICENSE@")
+    set(CPACK_RPM_PACKAGE_GROUP      "Applications/Engineering")
+    set(CPACK_RPM_PACKAGE_URL        "@TERMINALSIM_INSTALLER_HOMEPAGE@")
+    set(CPACK_RPM_PACKAGE_VENDOR     "@TERMINALSIM_INSTALLER_VENDOR@")
+    set(CPACK_RPM_PACKAGE_DESCRIPTION "@TERMINALSIM_INSTALLER_SUMMARY@")
+    set(CPACK_RPM_PACKAGE_AUTOREQ    OFF)
+    set(CPACK_RPM_PACKAGE_AUTOPROV   OFF)
+    set(CPACK_RPM_FILE_NAME          RPM-DEFAULT)
+    # Avoid colliding with system-managed paths on RPM-based distros.
+    set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+        "/usr/lib/systemd"
+        "/usr/lib/systemd/system")
+endif()
+
+# ---------------- NSIS (Windows) ----------------
+if(CPACK_GENERATOR STREQUAL "NSIS")
+    set(CPACK_NSIS_PACKAGE_NAME            "TerminalSim")
+    set(CPACK_NSIS_DISPLAY_NAME            "TerminalSim @TERMINALSIM_INSTALLER_VERSION@")
+    set(CPACK_NSIS_HELP_LINK               "@TERMINALSIM_INSTALLER_HOMEPAGE@")
+    set(CPACK_NSIS_URL_INFO_ABOUT          "@TERMINALSIM_INSTALLER_HOMEPAGE@")
+    set(CPACK_NSIS_CONTACT                 "@TERMINALSIM_INSTALLER_CONTACT@")
+    set(CPACK_NSIS_MODIFY_PATH             ON)
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+    set(CPACK_NSIS_MUI_ICON                "@INSTALLER_DIR@/assets/icon.ico")
+    set(CPACK_NSIS_MUI_UNIICON             "@INSTALLER_DIR@/assets/icon.ico")
+    set(CPACK_NSIS_INSTALL_ROOT            "$PROGRAMFILES64")
+    set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "TerminalSim")
+endif()
+
+# ---------------- DragNDrop (macOS) ----------------
+if(CPACK_GENERATOR STREQUAL "DragNDrop")
+    set(CPACK_DMG_VOLUME_NAME           "TerminalSim @TERMINALSIM_INSTALLER_VERSION@")
+    set(CPACK_DMG_FORMAT                "UDZO")
+    set(CPACK_SYSTEM_NAME               "macOS")
+endif()
+
+# ---------------- Archive generators ----------------
+if(CPACK_GENERATOR STREQUAL "TGZ" OR CPACK_GENERATOR STREQUAL "ZIP")
+    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+endif()

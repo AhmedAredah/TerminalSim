@@ -43,7 +43,7 @@
 </p>
 
 <p align="center">
-  <strong>TerminalSim is a server-side tool without a GUI, designed to operate in conjunction with <a href="https://github.com/VTTI-CSM/CargoNetSim" target="_blank">CargoNetSim</a>.</strong>
+  <strong>TerminalSim is a server-side tool without a GUI, designed to operate in conjunction with <a href="https://github.com/AhmedAredah/CargoNetSim" target="_blank">CargoNetSim</a>.</strong>
 </p>
 
 ## Overview
