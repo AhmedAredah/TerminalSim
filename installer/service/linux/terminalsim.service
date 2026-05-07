@@ -1,0 +1,28 @@
+[Unit]
+Description=TerminalSim container terminal simulation server
+Documentation=https://github.com/AhmedAredah/TerminalSim
+After=network-online.target rabbitmq-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/terminal_simulation
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# Resource limits (tune for your workload)
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

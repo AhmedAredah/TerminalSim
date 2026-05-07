@@ -1,0 +1,25 @@
+#!/bin/sh
+# DEB postinst hook for TerminalSim.
+#
+# We deliberately do NOT enable or start the systemd service. Operators opt in
+# explicitly via:
+#
+#   sudo systemctl enable --now terminalsim.service
+#
+# All this script does is reload the systemd unit catalog if systemd is the
+# active init system, so the unit becomes visible to systemctl.
+
+set -e
+
+UNIT_DST=/lib/systemd/system/terminalsim.service
+UNIT_SRC=/usr/share/terminalsim/service/linux/terminalsim.service
+
+if [ -f "$UNIT_SRC" ] && [ ! -e "$UNIT_DST" ]; then
+    install -m 0644 "$UNIT_SRC" "$UNIT_DST"
+fi
+
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+fi
+
+exit 0
