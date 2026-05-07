@@ -7,8 +7,13 @@
 
 namespace TerminalSim {
 
-// Define the namespace as a Qt namespace to enable meta-object features
-Q_NAMESPACE_EXPORT(Q_CORE_EXPORT)
+// Define the namespace as a Qt namespace to enable meta-object features.
+// terminal_common is a static library, so the metaobject must not carry any
+// dllexport/dllimport decoration. Q_NAMESPACE (without _EXPORT) emits the
+// metaobject with internal linkage suitable for static libraries; using
+// Q_NAMESPACE_EXPORT(Q_CORE_EXPORT) on MSVC made the symbol resolve as if
+// it lived in QtCore.dll and broke linking from consumers.
+Q_NAMESPACE
 
 /**
  * @brief Defines supported transportation modes for terminals

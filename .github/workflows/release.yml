@@ -172,7 +172,7 @@ jobs:
 
     env:
       DEPS_PREFIX: ${{ github.workspace }}\deps\install
-      VCPKG_DEFAULT_TRIPLET: x64-windows
+      RABBITMQ_C_REF: v0.15.0
 
     steps:
       - name: Check out TerminalSim
@@ -229,39 +229,46 @@ jobs:
           "QTIFW_ROOT=$($ifwRoot.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
           "$($ifwRoot.FullName)\bin"        | Out-File -FilePath $env:GITHUB_PATH -Append
 
-      - name: Install RabbitMQ-C via vcpkg
+      - name: Check out rabbitmq-c
+        # Build rabbitmq-c from source against the same MSVC toolchain we use
+        # for Container and TerminalSim itself. This mirrors how Container is
+        # handled and avoids vcpkg port name / SSL flake surprises.
+        uses: actions/checkout@v4
+        with:
+          repository: alanxz/rabbitmq-c
+          ref: ${{ env.RABBITMQ_C_REF }}
+          path: deps/rabbitmq-c
+
+      - name: Configure rabbitmq-c
         shell: pwsh
         run: |
-          # The vcpkg port is named 'librabbitmq' upstream; the resulting
-          # CMake config still installs under share/rabbitmq-c. Retry on
-          # transient network failures (SSL connect, DNS).
-          $attempts = 0
-          $maxAttempts = 4
-          while ($attempts -lt $maxAttempts) {
-              $attempts++
-              vcpkg install librabbitmq:x64-windows
-              if ($LASTEXITCODE -eq 0) { break }
-              if ($attempts -ge $maxAttempts) {
-                  throw "vcpkg install librabbitmq failed after $attempts attempts"
-              }
-              Write-Warning "vcpkg attempt $attempts failed; retrying in 15s..."
-              Start-Sleep -Seconds 15
-          }
+          cmake -S deps/rabbitmq-c -B deps/build/rabbitmq-c -G Ninja `
+            -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
+            -DCMAKE_INSTALL_PREFIX="$env:DEPS_PREFIX" `
+            -DBUILD_SHARED_LIBS=ON `
+            -DBUILD_EXAMPLES=OFF `
+            -DBUILD_TESTS=OFF `
+            -DBUILD_TOOLS=OFF `
+            -DBUILD_TOOLS_DOCS=OFF `
+            -DENABLE_SSL_SUPPORT=OFF
 
-          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+      - name: Install rabbitmq-c
+        shell: pwsh
+        run: cmake --build deps/build/rabbitmq-c --target install
+
+      - name: Resolve rabbitmq-c CMake config
+        shell: pwsh
+        run: |
           $rabbitCmakeDir = Get-ChildItem -Recurse `
-              -Path "$vcpkgRoot\installed\x64-windows\share" `
+              -Path "$env:DEPS_PREFIX" `
               -Filter 'rabbitmq-c-config.cmake' -ErrorAction SilentlyContinue |
               Select-Object -First 1 -ExpandProperty Directory
           if (-not $rabbitCmakeDir) {
-              Write-Error "rabbitmq-c CMake config not found after vcpkg install."
-              Get-ChildItem "$vcpkgRoot\installed\x64-windows\share" -Recurse -Depth 2 |
+              Write-Error "rabbitmq-c CMake config not found after install."
+              Get-ChildItem "$env:DEPS_PREFIX" -Recurse -Depth 3 -Filter '*.cmake' |
                   Format-Table FullName
               exit 1
           }
-
-          "VCPKG_TOOLCHAIN_FILE=$vcpkgRoot\scripts\buildsystems\vcpkg.cmake" |
-              Out-File -FilePath $env:GITHUB_ENV -Append
           "RABBITMQ_CMAKE_DIR=$($rabbitCmakeDir.FullName)" |
               Out-File -FilePath $env:GITHUB_ENV -Append
 
@@ -286,7 +293,6 @@ jobs:
           cmake -S . -B build -G Ninja `
             -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}\build\install" `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_TOOLCHAIN_FILE" `
             -DCMAKE_PREFIX_PATH="$env:DEPS_PREFIX" `
             -DCONTAINER_CMAKE_DIR="$env:DEPS_PREFIX\lib\cmake\Container" `
             -DRABBITMQ_CMAKE_DIR="$env:RABBITMQ_CMAKE_DIR" `
